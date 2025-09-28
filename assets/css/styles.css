@@ -1,0 +1,33 @@
+body {
+  min-height: 100vh;
+}
+
+.history-log {
+  max-height: 320px;
+  overflow-y: auto;
+  font-family: "Fira Code", "Courier New", monospace;
+  font-size: 0.95rem;
+}
+
+.property-card.owned {
+  border: 2px solid #198754;
+  box-shadow: 0 0 0.5rem rgba(25, 135, 84, 0.35);
+}
+
+.property-card .btn:disabled {
+  cursor: not-allowed;
+}
+
+#playerBalance {
+  font-size: 1.5rem;
+}
+
+.list-group-item + .list-group-item {
+  border-top: 1px dashed rgba(0, 0, 0, 0.1);
+}
+
+@media (max-width: 576px) {
+  #playerBalance {
+    font-size: 1.2rem;
+  }
+}

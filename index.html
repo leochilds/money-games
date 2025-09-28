@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Money Games - Property Tycoon</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+      crossorigin="anonymous"
+    />
+    <link rel="stylesheet" href="assets/css/styles.css" />
+  </head>
+  <body class="bg-light">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+      <div class="container">
+        <span class="navbar-brand mb-0 h1">Money Games</span>
+        <span class="navbar-text">Property Tycoon Simulator</span>
+      </div>
+    </nav>
+
+    <main class="container my-4">
+      <div class="row g-4">
+        <section class="col-12 col-lg-4">
+          <div class="card shadow-sm h-100">
+            <div class="card-header bg-success text-white">Player Overview</div>
+            <div class="card-body">
+              <p class="lead">Current Day: <span id="currentDay">1</span></p>
+              <p class="lead">
+                Balance: <span id="playerBalance" class="fw-bold text-success"></span>
+              </p>
+              <div class="mb-3">
+                <label for="speedControl" class="form-label">Game speed</label>
+                <select id="speedControl" class="form-select">
+                  <option value="2000">0.5x (slow &amp; steady)</option>
+                  <option value="1000" selected>1x (default)</option>
+                  <option value="500">2x (fast)</option>
+                  <option value="250">4x (very fast)</option>
+                </select>
+              </div>
+              <button id="resetButton" class="btn btn-outline-danger w-100">
+                Reset Game
+              </button>
+            </div>
+            <div class="card-footer text-muted">
+              Rent per Day: <span id="rentPerDay">0</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="col-12 col-lg-8">
+          <div class="card shadow-sm h-100">
+            <div class="card-header bg-info text-white">Property Portfolio</div>
+            <div class="card-body">
+              <p>
+                Purchase properties to build your rental empire. Each property
+                generates rent at the end of every in-game day. Owned
+                properties are highlighted below.
+              </p>
+              <div id="propertyList" class="row g-3"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="row g-4 mt-1">
+        <section class="col-12 col-lg-6">
+          <div class="card shadow-sm h-100">
+            <div class="card-header bg-warning">Rental Income Status</div>
+            <div class="card-body">
+              <ul id="incomeStatus" class="list-group list-group-flush"></ul>
+            </div>
+          </div>
+        </section>
+
+        <section class="col-12 col-lg-6">
+          <div class="card shadow-sm h-100">
+            <div class="card-header bg-secondary text-white">
+              Activity History
+            </div>
+            <div class="card-body">
+              <div
+                id="historyLog"
+                class="history-log border rounded p-3 bg-white"
+                aria-live="polite"
+              ></div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="py-4 bg-dark text-white">
+      <div class="container text-center">
+        <small>
+          Tip: Try to balance cash on hand with new investments to maximise
+          income growth.
+        </small>
+      </div>
+    </footer>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+      integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
+      crossorigin="anonymous"
+    ></script>
+    <script src="assets/js/game.js"></script>
+  </body>
+</html>
