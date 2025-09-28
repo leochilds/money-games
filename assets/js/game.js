@@ -8,6 +8,8 @@
       bedrooms: 1,
       bathrooms: 1,
       features: ["City View", "Shared Rooftop", "In-Unit Laundry"],
+      locationDescriptor: "Transit-rich downtown block with nightlife and offices steps away.",
+      demandScore: 9,
       location: {
         proximity: 0.95,
         schoolRating: 5,
@@ -23,6 +25,8 @@
       bedrooms: 3,
       bathrooms: 2,
       features: ["Private Patio", "Finished Basement", "Smart Thermostat"],
+      locationDescriptor: "Tree-lined heritage street close to cafes and boutique shops.",
+      demandScore: 7,
       location: {
         proximity: 0.75,
         schoolRating: 7,
@@ -38,6 +42,8 @@
       bedrooms: 4,
       bathrooms: 3,
       features: ["Two-Car Garage", "Backyard Deck", "Home Office"],
+      locationDescriptor: "Family-friendly cul-de-sac with parks and community amenities.",
+      demandScore: 6,
       location: {
         proximity: 0.6,
         schoolRating: 9,
@@ -58,6 +64,8 @@
         "Floor-to-Ceiling Windows",
         "Concierge Service",
       ],
+      locationDescriptor: "Top-floor suite in a premier downtown landmark tower.",
+      demandScore: 10,
       location: {
         proximity: 0.98,
         schoolRating: 8,
@@ -139,6 +147,7 @@
     history: [],
     tickLength: 1000,
     timerId: null,
+    lastRentCollectionDay: 0,
   };
 
   const elements = {};
@@ -146,7 +155,7 @@
   function cacheElements() {
     elements.balance = document.getElementById("playerBalance");
     elements.day = document.getElementById("currentDay");
-    elements.rentPerDay = document.getElementById("rentPerDay");
+    elements.rentPerMonth = document.getElementById("rentPerMonth");
     elements.propertyList = document.getElementById("propertyList");
     elements.incomeStatus = document.getElementById("incomeStatus");
     elements.historyLog = document.getElementById("historyLog");
@@ -173,17 +182,30 @@
     return propertyTypeLabels[type] ?? type;
   }
 
-  const RENT_YIELD = 0.08;
+  function mapDemandToAnnualYield(demandScore) {
+    const minYield = 0.03;
+    const maxYield = 0.08;
+    if (!Number.isFinite(demandScore)) {
+      return minYield;
+    }
+
+    const clampedScore = Math.min(Math.max(demandScore, 1), 10);
+    const progression = (clampedScore - 1) / 9;
+
+    return minYield + progression * (maxYield - minYield);
+  }
 
   function cloneDefaultProperties() {
     return defaultProperties.map((property) => {
       const cost = calculatePropertyValue(property);
-      const rent = Math.round(cost * RENT_YIELD);
+      const annualYield = mapDemandToAnnualYield(property.demandScore);
+      const monthlyRent = Math.round((cost * annualYield) / 12);
 
       return {
         ...property,
         cost,
-        rent,
+        annualYield,
+        monthlyRent,
         owned: false,
       };
     });
@@ -194,6 +216,7 @@
     state.day = 1;
     state.properties = cloneDefaultProperties();
     state.history = [];
+    state.lastRentCollectionDay = 0;
     if (logInitialMessage) {
       addHistoryEntry("New game started with $1,000 in capital.");
     } else {
@@ -230,22 +253,29 @@
 
   function handleDayTick() {
     state.day += 1;
-    const rentCollected = calculateRentPerDay();
-    if (rentCollected > 0) {
+    const daysSinceLastCollection = state.day - state.lastRentCollectionDay;
+    const monthsElapsed = Math.floor(daysSinceLastCollection / 30);
+
+    if (monthsElapsed > 0) {
+      const rentCollected = calculateRentPerMonth() * monthsElapsed;
       state.balance += rentCollected;
+      const startMonth = Math.floor(state.lastRentCollectionDay / 30) + 1;
+      const endMonth = startMonth + monthsElapsed - 1;
+      state.lastRentCollectionDay += monthsElapsed * 30;
+      const monthRange = monthsElapsed > 1 ? `${startMonth}-${endMonth}` : `${startMonth}`;
+      const monthLabel = monthsElapsed > 1 ? `${monthsElapsed} months` : "1 month";
       addHistoryEntry(
-        `Day ${state.day}: Collected ${formatCurrency(rentCollected)} in rent.`
+        `Month${monthsElapsed > 1 ? "s" : ""} ${monthRange}: Collected ${formatCurrency(rentCollected)} in rent for ${monthLabel}.`
       );
-    } else {
-      addHistoryEntry(`Day ${state.day}: No rent collected yet.`);
     }
+
     updateUI();
   }
 
-  function calculateRentPerDay() {
+  function calculateRentPerMonth() {
     return state.properties
       .filter((property) => property.owned)
-      .reduce((total, property) => total + property.rent, 0);
+      .reduce((total, property) => total + property.monthlyRent, 0);
   }
 
   function handlePurchase(propertyId) {
@@ -315,7 +345,10 @@
       const proximityPercent = ((location.proximity ?? 0) * 100).toFixed(0);
       const schoolRating = location.schoolRating ?? "-";
       const crimeScore = location.crimeScore ?? "-";
-      locationDetails.innerHTML = `<strong>Location:</strong> ${proximityPercent}% transit access · Schools ${schoolRating}/10 · Crime score ${crimeScore}/10`;
+      const descriptor = property.locationDescriptor
+        ? `${property.locationDescriptor} · `
+        : "";
+      locationDetails.innerHTML = `<strong>Location:</strong> ${descriptor}${proximityPercent}% transit access · Schools ${schoolRating}/10 · Crime score ${crimeScore}/10`;
 
       const maintenance = document.createElement("p");
       maintenance.className = "small text-muted mb-2";
@@ -325,14 +358,19 @@
       );
       maintenance.innerHTML = `<strong>Maintenance:</strong> ${maintenanceLabel || "Unknown"}`;
 
+      const demand = document.createElement("p");
+      demand.className = "small text-muted mb-2";
+      const annualYieldPercent = ((property.annualYield ?? 0) * 100).toFixed(1);
+      demand.innerHTML = `<strong>Demand:</strong> ${property.demandScore ?? "-"}/10 · Estimated yield ${annualYieldPercent}%`;
+
       const cost = document.createElement("p");
       cost.className = "mb-1";
       cost.innerHTML = `<strong>Cost:</strong> ${formatCurrency(property.cost)}`;
 
       const rent = document.createElement("p");
       rent.className = "mb-3";
-      rent.innerHTML = `<strong>Rent / day:</strong> ${formatCurrency(
-        property.rent
+      rent.innerHTML = `<strong>Rent / month:</strong> ${formatCurrency(
+        property.monthlyRent
       )}`;
 
       const button = document.createElement("button");
@@ -348,6 +386,7 @@
         summary,
         ...(features.childElementCount ? [features] : []),
         locationDetails,
+        demand,
         maintenance
       );
 
@@ -378,7 +417,7 @@
           <strong>${property.name}</strong>
           <small class="d-block text-muted">${property.description}</small>
         </span>
-        <span class="badge bg-success rounded-pill">${formatCurrency(property.rent)}</span>
+        <span class="badge bg-success rounded-pill">Rent / month: ${formatCurrency(property.monthlyRent)}</span>
       `;
       elements.incomeStatus.append(item);
     });
@@ -398,8 +437,8 @@
   function updateUI() {
     elements.balance.textContent = formatCurrency(state.balance);
     elements.day.textContent = state.day.toString();
-    const rentPerDay = calculateRentPerDay();
-    elements.rentPerDay.textContent = formatCurrency(rentPerDay);
+    const rentPerMonth = calculateRentPerMonth();
+    elements.rentPerMonth.textContent = formatCurrency(rentPerMonth);
     renderProperties();
     renderIncomeStatus();
     renderHistory();
