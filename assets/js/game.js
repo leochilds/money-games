@@ -2,33 +2,135 @@
   const defaultProperties = [
     {
       id: "studio",
-      name: "Studio Apartment",
-      description: "An affordable entry into the market.",
-      cost: 350,
-      rent: 35,
+      name: "Downtown Micro Loft",
+      description: "Compact living in the heart of the city, perfect for commuters.",
+      propertyType: "apartment",
+      bedrooms: 1,
+      bathrooms: 1,
+      features: ["City View", "Shared Rooftop", "In-Unit Laundry"],
+      location: {
+        proximity: 0.95,
+        schoolRating: 5,
+        crimeScore: 4,
+      },
+      maintenanceLevel: "medium",
     },
     {
       id: "townhouse",
-      name: "City Townhouse",
-      description: "Popular with young professionals.",
-      cost: 650,
-      rent: 85,
+      name: "Historic Row Townhouse",
+      description: "Updated interiors with charming brick facade and private entry.",
+      propertyType: "townhouse",
+      bedrooms: 3,
+      bathrooms: 2,
+      features: ["Private Patio", "Finished Basement", "Smart Thermostat"],
+      location: {
+        proximity: 0.75,
+        schoolRating: 7,
+        crimeScore: 3,
+      },
+      maintenanceLevel: "medium",
     },
     {
       id: "suburb",
-      name: "Suburban Family Home",
-      description: "Stable tenants, steady rent flow.",
-      cost: 900,
-      rent: 125,
+      name: "Suburban Cul-de-sac Home",
+      description: "Spacious single-family house in a top-rated school district.",
+      propertyType: "single_family",
+      bedrooms: 4,
+      bathrooms: 3,
+      features: ["Two-Car Garage", "Backyard Deck", "Home Office"],
+      location: {
+        proximity: 0.6,
+        schoolRating: 9,
+        crimeScore: 2,
+      },
+      maintenanceLevel: "low",
     },
     {
       id: "penthouse",
-      name: "Luxury Penthouse",
-      description: "High maintenance, higher reward.",
-      cost: 1400,
-      rent: 240,
+      name: "Skyline Signature Penthouse",
+      description: "Expansive luxury residence with concierge and spa access.",
+      propertyType: "luxury",
+      bedrooms: 3,
+      bathrooms: 3,
+      features: [
+        "Private Elevator",
+        "Wraparound Terrace",
+        "Floor-to-Ceiling Windows",
+        "Concierge Service",
+      ],
+      location: {
+        proximity: 0.98,
+        schoolRating: 8,
+        crimeScore: 2,
+      },
+      maintenanceLevel: "high",
     },
   ];
+
+  const propertyTypeMultipliers = {
+    apartment: 0.9,
+    townhouse: 1.05,
+    single_family: 1.15,
+    luxury: 1.35,
+  };
+
+  const maintenanceLevelMultipliers = {
+    low: 1.1,
+    medium: 1,
+    high: 0.88,
+  };
+
+  const featureAddOns = {
+    "City View": 60,
+    "Shared Rooftop": 40,
+    "In-Unit Laundry": 55,
+    "Private Patio": 65,
+    "Finished Basement": 75,
+    "Smart Thermostat": 30,
+    "Two-Car Garage": 90,
+    "Backyard Deck": 70,
+    "Home Office": 50,
+    "Private Elevator": 120,
+    "Wraparound Terrace": 110,
+    "Floor-to-Ceiling Windows": 85,
+    "Concierge Service": 95,
+  };
+
+  function calculatePropertyValue(property) {
+    const weights = {
+      base: 220,
+      bedrooms: 95,
+      bathrooms: 80,
+      proximity: 160,
+      schoolRating: 22,
+      safety: 18,
+    };
+
+    const { bedrooms = 0, bathrooms = 0, propertyType, features = [], location = {}, maintenanceLevel } = property;
+
+    const proximityScore = (location.proximity ?? 0) * weights.proximity;
+    const schoolScore = (location.schoolRating ?? 0) * weights.schoolRating;
+    const safetyScore = (10 - (location.crimeScore ?? 5)) * weights.safety;
+
+    const featureScore = features.reduce(
+      (total, feature) => total + (featureAddOns[feature] ?? 35),
+      0
+    );
+
+    const baseValue =
+      weights.base +
+      bedrooms * weights.bedrooms +
+      bathrooms * weights.bathrooms +
+      proximityScore +
+      schoolScore +
+      safetyScore +
+      featureScore;
+
+    const typeMultiplier = propertyTypeMultipliers[propertyType] ?? 1;
+    const maintenanceMultiplier = maintenanceLevelMultipliers[maintenanceLevel] ?? 1;
+
+    return Math.round(baseValue * typeMultiplier * maintenanceMultiplier);
+  }
 
   const state = {
     balance: 0,
@@ -60,8 +162,31 @@
     }).format(amount);
   }
 
+  const propertyTypeLabels = {
+    apartment: "Apartment",
+    townhouse: "Townhouse",
+    single_family: "Single-Family Home",
+    luxury: "Luxury Residence",
+  };
+
+  function formatPropertyType(type) {
+    return propertyTypeLabels[type] ?? type;
+  }
+
+  const RENT_YIELD = 0.08;
+
   function cloneDefaultProperties() {
-    return defaultProperties.map((property) => ({ ...property, owned: false }));
+    return defaultProperties.map((property) => {
+      const cost = calculatePropertyValue(property);
+      const rent = Math.round(cost * RENT_YIELD);
+
+      return {
+        ...property,
+        cost,
+        rent,
+        owned: false,
+      };
+    });
   }
 
   function initialiseGameState(logInitialMessage = true) {
@@ -166,8 +291,39 @@
       title.textContent = property.name;
 
       const description = document.createElement("p");
-      description.className = "card-text flex-grow-1";
+      description.className = "card-text";
       description.textContent = property.description;
+
+      const summary = document.createElement("p");
+      summary.className = "mb-2 small";
+      summary.innerHTML = `<strong>${property.bedrooms}</strong> bed · <strong>${property.bathrooms}</strong> bath · ${formatPropertyType(
+        property.propertyType
+      )}`;
+
+      const features = document.createElement("ul");
+      features.className = "list-inline small text-muted mb-2";
+      (property.features ?? []).forEach((feature) => {
+        const item = document.createElement("li");
+        item.className = "list-inline-item badge bg-light text-dark border";
+        item.textContent = feature;
+        features.append(item);
+      });
+
+      const locationDetails = document.createElement("p");
+      locationDetails.className = "small text-muted mb-2";
+      const location = property.location ?? {};
+      const proximityPercent = ((location.proximity ?? 0) * 100).toFixed(0);
+      const schoolRating = location.schoolRating ?? "-";
+      const crimeScore = location.crimeScore ?? "-";
+      locationDetails.innerHTML = `<strong>Location:</strong> ${proximityPercent}% transit access · Schools ${schoolRating}/10 · Crime score ${crimeScore}/10`;
+
+      const maintenance = document.createElement("p");
+      maintenance.className = "small text-muted mb-2";
+      const maintenanceLabel = (property.maintenanceLevel ?? "").replace(
+        /(^|_)([a-z])/g,
+        (_, prefix, char) => `${prefix === "_" ? " " : ""}${char.toUpperCase()}`
+      );
+      maintenance.innerHTML = `<strong>Maintenance:</strong> ${maintenanceLabel || "Unknown"}`;
 
       const cost = document.createElement("p");
       cost.className = "mb-1";
@@ -186,7 +342,16 @@
       button.disabled = property.owned || state.balance < property.cost;
       button.addEventListener("click", () => handlePurchase(property.id));
 
-      cardBody.append(title, description, cost, rent, button);
+      const detailSection = document.createElement("div");
+      detailSection.className = "mb-3 flex-grow-1";
+      detailSection.append(
+        summary,
+        ...(features.childElementCount ? [features] : []),
+        locationDetails,
+        maintenance
+      );
+
+      cardBody.append(title, description, detailSection, cost, rent, button);
       card.append(cardBody);
       col.append(card);
       elements.propertyList.append(col);
