@@ -246,9 +246,9 @@
   const MARKET_CONFIG = {
     maxSize: 8,
     minSize: 4,
-    generationInterval: 3,
+    generationInterval: 30,
     batchSize: 2,
-    maxAge: 12,
+    maxAge: 120,
   };
 
   function calculatePropertyValue(property) {
@@ -442,10 +442,16 @@
 
     const daysSinceGeneration = state.day - state.lastMarketGenerationDay;
     const spaceAvailable = Math.max(MARKET_CONFIG.maxSize - state.market.length, 0);
-    let requiredListings = Math.max(MARKET_CONFIG.minSize - state.market.length, 0);
+    const readyForNewListings = daysSinceGeneration >= MARKET_CONFIG.generationInterval;
 
-    if (requiredListings === 0 && daysSinceGeneration >= MARKET_CONFIG.generationInterval) {
-      requiredListings = getRandomInt(1, MARKET_CONFIG.batchSize);
+    let requiredListings = 0;
+    if (readyForNewListings && spaceAvailable > 0) {
+      const minimumShortfall = Math.max(MARKET_CONFIG.minSize - state.market.length, 0);
+      if (minimumShortfall > 0) {
+        requiredListings = minimumShortfall;
+      } else {
+        requiredListings = getRandomInt(1, MARKET_CONFIG.batchSize);
+      }
     }
 
     const listingsNeeded = Math.min(requiredListings, spaceAvailable);
