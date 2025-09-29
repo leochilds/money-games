@@ -509,6 +509,10 @@
     luxury: "Luxury Residence",
   };
 
+  function roundCurrency(amount) {
+    return Math.round(amount * 100) / 100;
+  }
+
   function formatPropertyType(type) {
     return propertyTypeLabels[type] ?? type;
   }
@@ -538,7 +542,7 @@
 
     const factor = (1 + monthlyRate) ** termMonths;
     const payment = (principal * monthlyRate * factor) / (factor - 1);
-    return Math.round(payment * 100) / 100;
+    return roundCurrency(payment);
   }
 
   function createMortgageForCost(cost) {
@@ -571,9 +575,48 @@
     }
 
     const interestDue = mortgage.remainingBalance * mortgage.monthlyInterestRate;
-    const scheduledPayment = Math.round(mortgage.monthlyPayment * 100) / 100;
+    const scheduledPayment = roundCurrency(mortgage.monthlyPayment);
     const totalDue = mortgage.remainingBalance + interestDue;
-    return Math.min(scheduledPayment, Math.round(totalDue * 100) / 100);
+    return Math.min(scheduledPayment, roundCurrency(totalDue));
+  }
+
+  function getMortgagePaymentBreakdown(mortgage) {
+    if (!mortgage || mortgage.remainingTermMonths <= 0 || mortgage.remainingBalance <= 0) {
+      return {
+        monthlyPayment: 0,
+        interestComponent: 0,
+        principalComponent: 0,
+        outstandingPrincipal: 0,
+        outstandingInterest: 0,
+        totalOutstanding: 0,
+        paymentsRemaining: 0,
+      };
+    }
+
+    const outstandingPrincipal = roundCurrency(mortgage.remainingBalance);
+    const rawInterestDue = mortgage.remainingBalance * mortgage.monthlyInterestRate;
+    const outstandingInterest = Math.max(roundCurrency(rawInterestDue), 0);
+    const scheduledPayment = roundCurrency(mortgage.monthlyPayment);
+    const totalDue = roundCurrency(outstandingPrincipal + outstandingInterest);
+    const monthlyPayment = Math.min(scheduledPayment, totalDue);
+    const interestComponent = Math.min(outstandingInterest, monthlyPayment);
+    const principalComponent = roundCurrency(Math.max(monthlyPayment - interestComponent, 0));
+    const adjustedPrincipalComponent = Math.min(principalComponent, outstandingPrincipal);
+
+    let paymentsRemaining = mortgage.remainingTermMonths;
+    if (paymentsRemaining <= 0 && (outstandingPrincipal > 0 || outstandingInterest > 0)) {
+      paymentsRemaining = 1;
+    }
+
+    return {
+      monthlyPayment,
+      interestComponent,
+      principalComponent: adjustedPrincipalComponent,
+      outstandingPrincipal,
+      outstandingInterest,
+      totalOutstanding: roundCurrency(outstandingPrincipal + outstandingInterest),
+      paymentsRemaining,
+    };
   }
 
   function mapDemandToAnnualYield(demandScore) {
@@ -703,15 +746,16 @@
   }
 
   function calculateMonthlyMortgageOutgoings() {
-    return state.portfolio.reduce((total, property) => {
+    const total = state.portfolio.reduce((sum, property) => {
       const payment = getNextMortgagePayment(property.mortgage);
-      return total + payment;
+      return sum + payment;
     }, 0);
+    return roundCurrency(total);
   }
 
   function calculateNetCashflowPerMonth() {
     const net = calculateRentPerMonth() - calculateMonthlyMortgageOutgoings();
-    return Math.round(net * 100) / 100;
+    return roundCurrency(net);
   }
 
   function calculateNetCashForProperty(property) {
@@ -720,7 +764,7 @@
     }
     const mortgagePayment = getNextMortgagePayment(property.mortgage);
     const net = property.monthlyRent - mortgagePayment;
-    return Math.round(net * 100) / 100;
+    return roundCurrency(net);
   }
 
   function processMortgagePayments(monthsElapsed) {
@@ -743,18 +787,15 @@
         }
 
         const interestDueRaw = mortgage.remainingBalance * mortgage.monthlyInterestRate;
-        const interestDue = Math.round(interestDueRaw * 100) / 100;
-        let payment = Math.round(mortgage.monthlyPayment * 100) / 100;
+        const interestDue = roundCurrency(interestDueRaw);
+        let payment = roundCurrency(mortgage.monthlyPayment);
         const totalDue = mortgage.remainingBalance + interestDue;
         if (payment > totalDue) {
-          payment = Math.round(totalDue * 100) / 100;
+          payment = roundCurrency(totalDue);
         }
 
-        const principalPaid = Math.round((payment - interestDue) * 100) / 100;
-        mortgage.remainingBalance = Math.max(
-          Math.round((mortgage.remainingBalance - principalPaid) * 100) / 100,
-          0
-        );
+        const principalPaid = roundCurrency(payment - interestDue);
+        mortgage.remainingBalance = Math.max(roundCurrency(mortgage.remainingBalance - principalPaid), 0);
         mortgage.remainingTermMonths -= 1;
         totalPaid += payment;
       }
@@ -765,7 +806,7 @@
       }
     });
 
-    return { totalPaid: Math.round(totalPaid * 100) / 100, mortgagesCleared };
+    return { totalPaid: roundCurrency(totalPaid), mortgagesCleared };
   }
 
   function calculateSalePrice(property) {
@@ -847,23 +888,35 @@
     const property = state.portfolio[propertyIndex];
     const salePrice = calculateSalePrice(property);
     let mortgagePayoff = 0;
+    let mortgageInterestDue = 0;
     if (property.mortgage && property.mortgage.remainingBalance > 0) {
-      mortgagePayoff = Math.round(property.mortgage.remainingBalance * 100) / 100;
+      const breakdown = getMortgagePaymentBreakdown(property.mortgage);
+      mortgagePayoff = breakdown.outstandingPrincipal;
+      mortgageInterestDue = breakdown.outstandingInterest;
     }
 
-    const netProceeds = salePrice - mortgagePayoff;
+    const totalMortgageSettlement = roundCurrency(mortgagePayoff + mortgageInterestDue);
+    const netProceeds = roundCurrency(salePrice - totalMortgageSettlement);
     state.balance += netProceeds;
     state.portfolio.splice(propertyIndex, 1);
-    if (mortgagePayoff > 0) {
+    if (totalMortgageSettlement > 0) {
+      const components = [];
+      if (mortgagePayoff > 0) {
+        components.push(`${formatCurrency(mortgagePayoff)} loan balance`);
+      }
+      if (mortgageInterestDue > 0) {
+        components.push(`${formatCurrency(mortgageInterestDue)} interest`);
+      }
+      const settlementSummary = components.join(" and ");
       addHistoryEntry(
-        `Sold ${property.name} for ${formatCurrency(salePrice)} and repaid ${formatCurrency(
-          mortgagePayoff
-        )} remaining on the mortgage.`
+        `Sold ${property.name} for ${formatCurrency(salePrice)}, repaid ${settlementSummary} remaining on the mortgage (net ${formatCurrency(
+          netProceeds
+        )}).`
       );
     } else {
       addHistoryEntry(`Sold ${property.name} for ${formatCurrency(salePrice)}.`);
     }
-    state.balance = Math.round(state.balance * 100) / 100;
+    state.balance = roundCurrency(state.balance);
     updateUI();
   }
 
@@ -1014,15 +1067,42 @@
       }
 
       const mortgage = property.mortgage;
-      const mortgagePayment = getNextMortgagePayment(mortgage);
-      const cashflowDetails = document.createElement("small");
-      cashflowDetails.className = "d-block text-muted";
+      const cashflowDetails = document.createElement("div");
+      cashflowDetails.className = "small text-muted";
+      let mortgageBreakdown = null;
       if (mortgage) {
-        cashflowDetails.textContent = `Rent ${formatCurrency(property.monthlyRent)} · Mortgage ${formatCurrency(
-          mortgagePayment
-        )} / month · Balance ${formatCurrency(mortgage.remainingBalance)} (${mortgage.remainingTermMonths} months left)`;
+        mortgageBreakdown = getMortgagePaymentBreakdown(mortgage);
+        const breakdown = mortgageBreakdown;
+        const summaryLine = document.createElement("div");
+        summaryLine.textContent = `Rent ${formatCurrency(property.monthlyRent)} · Mortgage ${formatCurrency(
+          breakdown.monthlyPayment
+        )} / month`;
+
+        const outstandingLine = document.createElement("div");
+        outstandingLine.textContent = `Outstanding: ${formatCurrency(
+          breakdown.outstandingPrincipal
+        )} loan + ${formatCurrency(breakdown.outstandingInterest)} interest (${formatCurrency(
+          breakdown.totalOutstanding
+        )} total)`;
+
+        const paymentSplitLine = document.createElement("div");
+        paymentSplitLine.textContent = `This month's payment: ${formatCurrency(
+          breakdown.principalComponent
+        )} loan + ${formatCurrency(breakdown.interestComponent)} interest`;
+
+        const paymentsRemainingLine = document.createElement("div");
+        paymentsRemainingLine.textContent = `${breakdown.paymentsRemaining} payments remaining`;
+
+        cashflowDetails.append(
+          summaryLine,
+          outstandingLine,
+          paymentSplitLine,
+          paymentsRemainingLine
+        );
       } else {
-        cashflowDetails.textContent = `Rent ${formatCurrency(property.monthlyRent)} · No mortgage obligations`;
+        const summaryLine = document.createElement("div");
+        summaryLine.textContent = `Rent ${formatCurrency(property.monthlyRent)} · No mortgage obligations`;
+        cashflowDetails.append(summaryLine);
       }
       info.append(cashflowDetails);
 
@@ -1036,10 +1116,18 @@
       rentBadge.textContent = `Net / month: ${formatCurrency(netCash)}`;
 
       const salePrice = calculateSalePrice(property);
+      let netSaleLabel = `Sell for ${formatCurrency(salePrice)}`;
+      if (mortgageBreakdown) {
+        const settlement = mortgageBreakdown.totalOutstanding;
+        if (settlement > 0) {
+          const netProceeds = roundCurrency(salePrice - settlement);
+          netSaleLabel = `Sell for ${formatCurrency(salePrice)} (net ${formatCurrency(netProceeds)})`;
+        }
+      }
       const sellButton = document.createElement("button");
       sellButton.type = "button";
       sellButton.className = "btn btn-outline-danger btn-sm";
-      sellButton.textContent = `Sell for ${formatCurrency(salePrice)}`;
+      sellButton.textContent = netSaleLabel;
       sellButton.addEventListener("click", () => handleSale(property.id));
 
       actionWrapper.append(rentBadge, sellButton);
