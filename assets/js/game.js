@@ -518,6 +518,7 @@
   function cacheElements() {
     elements.balance = document.getElementById("playerBalance");
     elements.day = document.getElementById("currentDay");
+    elements.centralBankRate = document.getElementById("centralBankRate");
     elements.rentPerMonth = document.getElementById("rentPerMonth");
     elements.propertyList = document.getElementById("propertyList");
     elements.incomeStatus = document.getElementById("incomeStatus");
@@ -566,6 +567,13 @@
       return "-";
     }
     return `${Math.round(value * 100)}%`;
+  }
+
+  function formatInterestRate(value) {
+    if (!Number.isFinite(value)) {
+      return "-";
+    }
+    return `${(value * 100).toFixed(2)}%`;
   }
 
   function deriveMortgageRateProfile({ depositRatio, termYears, baseRate } = {}) {
@@ -1965,6 +1973,9 @@
   function updateUI() {
     elements.balance.textContent = formatCurrency(state.balance);
     elements.day.textContent = state.day.toString();
+    if (elements.centralBankRate) {
+      elements.centralBankRate.textContent = formatInterestRate(state.centralBankRate);
+    }
     const grossRent = calculateRentPerMonth();
     const mortgageOutgoings = calculateMonthlyMortgageOutgoings();
     const netCashflow = calculateNetCashflowPerMonth();
