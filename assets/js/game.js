@@ -95,7 +95,23 @@
     defaultTermYears: 25,
     minimumRate: 0.025,
     maximumRate: 0.085,
-    baseRate: 0.0375,
+    centralBank: {
+      initialRate: 0.0375,
+      minimumRate: 0.005,
+      adjustmentIntervalDays: 30,
+      maxStepPerAdjustment: 0.0015,
+    },
+    rateModel: {
+      variableMarginBase: 0.015,
+      variableMarginDepositFactor: 0.08,
+      minimumMargin: 0.004,
+      fixedRateIncentives: {
+        2: -0.0035,
+        5: -0.0025,
+        10: -0.0015,
+        25: 0,
+      },
+    },
   };
 
   const featureAddOns = {
@@ -303,6 +319,8 @@
     market: [],
     portfolio: [],
     history: [],
+    centralBankRate: FINANCE_CONFIG.centralBank.initialRate,
+    lastCentralBankAdjustmentDay: 0,
     tickLength: 1000,
     timerId: null,
     lastRentCollectionDay: 0,
@@ -315,7 +333,8 @@
     propertyId: null,
     depositRatio: FINANCE_CONFIG.defaultDepositRatio,
     termYears: FINANCE_CONFIG.defaultTermYears,
-    annualInterestRate: FINANCE_CONFIG.baseRate,
+    annualInterestRate: FINANCE_CONFIG.centralBank.initialRate,
+    rateProfile: null,
   };
 
   let financeModalInstance = null;
@@ -534,6 +553,10 @@
     return Math.round(amount * 100) / 100;
   }
 
+  function roundRate(value) {
+    return Math.round(value * 10000) / 10000;
+  }
+
   function formatPropertyType(type) {
     return propertyTypeLabels[type] ?? type;
   }
@@ -545,20 +568,47 @@
     return `${Math.round(value * 100)}%`;
   }
 
-  function calculateDynamicInterestRate(depositRatio, termYears) {
-    const minOption = FINANCE_CONFIG.depositOptions[0];
-    const maxOption = FINANCE_CONFIG.depositOptions[FINANCE_CONFIG.depositOptions.length - 1];
-    const ratio = Number.isFinite(depositRatio)
-      ? Math.min(Math.max(depositRatio, minOption), maxOption)
+  function deriveMortgageRateProfile({ depositRatio, termYears, baseRate } = {}) {
+    const { centralBank, rateModel, maximumRate, minimumRate } = FINANCE_CONFIG;
+    const minDeposit = FINANCE_CONFIG.depositOptions[0];
+    const maxDeposit = FINANCE_CONFIG.depositOptions[FINANCE_CONFIG.depositOptions.length - 1];
+    const resolvedDepositRatio = Number.isFinite(depositRatio)
+      ? Math.min(Math.max(depositRatio, minDeposit), maxDeposit)
       : FINANCE_CONFIG.defaultDepositRatio;
-    const years = Number.isFinite(termYears) ? Math.max(termYears, 1) : FINANCE_CONFIG.defaultTermYears;
-    const depositAdjustment = (FINANCE_CONFIG.defaultDepositRatio - ratio) * 0.4;
-    const termAdjustment = (years - 10) * 0.0015;
-    const rawRate = FINANCE_CONFIG.baseRate + depositAdjustment + termAdjustment;
-    return Math.min(
-      FINANCE_CONFIG.maximumRate,
-      Math.max(FINANCE_CONFIG.minimumRate, Math.round(rawRate * 10000) / 10000)
+    const resolvedFixedYears = Number.isFinite(termYears)
+      ? Math.max(Math.round(termYears), 1)
+      : FINANCE_CONFIG.defaultTermYears;
+    const resolvedBaseRate = Number.isFinite(baseRate)
+      ? baseRate
+      : state.centralBankRate ?? centralBank.initialRate;
+
+    const depositAdjustment =
+      (FINANCE_CONFIG.defaultDepositRatio - resolvedDepositRatio) * rateModel.variableMarginDepositFactor;
+    const rawMargin = rateModel.variableMarginBase + depositAdjustment;
+    const variableMargin = Math.max(rateModel.minimumMargin, roundRate(rawMargin));
+    const fixedIncentive = rateModel.fixedRateIncentives[resolvedFixedYears] ?? 0;
+
+    const provisionalFixed = roundRate(resolvedBaseRate + variableMargin + fixedIncentive);
+    const fixedRate = roundRate(
+      Math.max(
+        resolvedBaseRate,
+        Math.max(minimumRate ?? 0, Math.min(maximumRate, provisionalFixed))
+      )
     );
+    const reversionRate = roundRate(
+      Math.max(
+        resolvedBaseRate,
+        Math.min(maximumRate, roundRate(resolvedBaseRate + variableMargin))
+      )
+    );
+
+    return {
+      baseRate: roundRate(resolvedBaseRate),
+      fixedPeriodYears: resolvedFixedYears,
+      fixedRate,
+      variableRateMargin: roundRate(Math.max(0, reversionRate - resolvedBaseRate)),
+      reversionRate,
+    };
   }
 
   function calculateMortgageDeposit(cost, depositRatio = FINANCE_CONFIG.defaultDepositRatio) {
@@ -596,6 +646,8 @@
       depositRatio = FINANCE_CONFIG.defaultDepositRatio,
       termYears = FINANCE_CONFIG.defaultTermYears,
       annualInterestRate,
+      rateProfile,
+      baseRate,
       interestOnly = false,
     } = {}
   ) {
@@ -603,9 +655,20 @@
     const principal = Math.max(cost - deposit, 0);
     const termMonths = Math.round((Number.isFinite(termYears) ? termYears : FINANCE_CONFIG.defaultTermYears) * 12);
     const resolvedTermYears = termMonths / 12;
-    const rate = Number.isFinite(annualInterestRate)
-      ? annualInterestRate
-      : calculateDynamicInterestRate(depositRatio, resolvedTermYears);
+    const resolvedProfile = rateProfile ?? deriveMortgageRateProfile({
+      depositRatio,
+      termYears: resolvedTermYears,
+      baseRate,
+    });
+    const fixedRateOverride = Number.isFinite(annualInterestRate)
+      ? roundRate(
+          Math.max(
+            resolvedProfile.baseRate,
+            Math.min(FINANCE_CONFIG.maximumRate, annualInterestRate)
+          )
+        )
+      : resolvedProfile.fixedRate;
+    const rate = Math.max(resolvedProfile.baseRate, fixedRateOverride);
     const monthlyRate = rate / 12;
     let monthlyPayment;
 
@@ -631,6 +694,11 @@
       remainingTermMonths: termMonths,
       interestOnly: Boolean(interestOnly),
       depositRatio,
+      baseRate: resolvedProfile.baseRate,
+      fixedPeriodYears: resolvedProfile.fixedPeriodYears,
+      fixedRate: rate,
+      variableRateMargin: resolvedProfile.variableRateMargin,
+      reversionRate: resolvedProfile.reversionRate,
       productKey: null,
       productLabel: "Custom mortgage",
     };
@@ -789,10 +857,16 @@
     state.market = cloneDefaultProperties();
     state.portfolio = [];
     state.history = [];
+    state.centralBankRate = FINANCE_CONFIG.centralBank.initialRate;
+    state.lastCentralBankAdjustmentDay = 0;
     state.lastRentCollectionDay = 0;
     state.lastMarketGenerationDay = state.day;
+    financeState.rateProfile = null;
     if (logInitialMessage) {
       addHistoryEntry("New game started with $1,000 in capital.");
+      addHistoryEntry(
+        `Central bank base rate set at ${(state.centralBankRate * 100).toFixed(2)}% to start the simulation.`
+      );
     } else {
       renderHistory();
     }
@@ -825,8 +899,51 @@
     }
   }
 
+  function adjustCentralBankRateIfNeeded() {
+    const { centralBank } = FINANCE_CONFIG;
+    const interval = centralBank.adjustmentIntervalDays ?? 30;
+    if (!interval || interval <= 0) {
+      return false;
+    }
+
+    const daysSinceAdjustment = state.day - state.lastCentralBankAdjustmentDay;
+    if (daysSinceAdjustment < interval) {
+      return false;
+    }
+
+    const stepRange = Math.max(centralBank.maxStepPerAdjustment ?? 0, 0);
+    const delta = stepRange > 0 ? roundRate(getRandomNumber(-stepRange, stepRange, 4)) : 0;
+    const minimumRate = Math.max(centralBank.minimumRate ?? 0, 0);
+    const rawNextRate = state.centralBankRate + delta;
+    const nextRate = roundRate(
+      Math.max(minimumRate, Math.min(FINANCE_CONFIG.maximumRate, rawNextRate))
+    );
+    const change = roundRate(nextRate - state.centralBankRate);
+
+    state.centralBankRate = nextRate;
+    state.lastCentralBankAdjustmentDay = state.day;
+
+    if (Math.abs(change) > 0) {
+      const direction = change >= 0 ? "increased" : "decreased";
+      addHistoryEntry(
+        `Central bank base rate ${direction} to ${(nextRate * 100).toFixed(2)}% (${change >= 0 ? "+" : ""}${(change * 100).toFixed(2)} pp).`
+      );
+    } else {
+      addHistoryEntry(
+        `Central bank held the base rate at ${(nextRate * 100).toFixed(2)}%.`
+      );
+    }
+
+    if (financeState.propertyId) {
+      updateFinancePreview();
+    }
+
+    return true;
+  }
+
   function handleDayTick() {
     state.day += 1;
+    const rateChanged = adjustCentralBankRateIfNeeded();
     const daysSinceLastCollection = state.day - state.lastRentCollectionDay;
     const monthsElapsed = Math.floor(daysSinceLastCollection / 30);
 
@@ -884,7 +1001,7 @@
 
     const marketUpdated = progressMarketListings();
 
-    if (!marketUpdated) {
+    if (!marketUpdated || rateChanged) {
       updateUI();
     }
   }
@@ -1044,7 +1161,7 @@
     {
       depositRatio = FINANCE_CONFIG.defaultDepositRatio,
       termYears = FINANCE_CONFIG.defaultTermYears,
-      annualInterestRate,
+      rateProfile,
       interestOnly = false,
     } = {}
   ) {
@@ -1054,13 +1171,14 @@
     }
 
     const property = state.market[propertyIndex];
-    const resolvedRate = Number.isFinite(annualInterestRate)
-      ? annualInterestRate
-      : calculateDynamicInterestRate(depositRatio, termYears);
+    const resolvedProfile = rateProfile ?? deriveMortgageRateProfile({
+      depositRatio,
+      termYears,
+    });
     const mortgage = createMortgageForCost(property.cost, {
       depositRatio,
       termYears,
-      annualInterestRate: resolvedRate,
+      rateProfile: resolvedProfile,
       interestOnly,
     });
     const deposit = mortgage.deposit;
@@ -1078,18 +1196,24 @@
     state.market.splice(propertyIndex, 1);
     const purchasedProperty = { ...property, mortgage };
     state.portfolio.push(purchasedProperty);
-    const interestRateLabel = (mortgage.annualInterestRate * 100).toFixed(2);
+    const fixedRateLabel = (mortgage.fixedRate * 100).toFixed(2);
+    const baseRateLabel = (mortgage.baseRate * 100).toFixed(2);
+    const marginLabel = (mortgage.variableRateMargin * 100).toFixed(2);
+    const reversionRateLabel = (mortgage.reversionRate * 100).toFixed(2);
+    const fixedPeriodLabel = `${mortgage.fixedPeriodYears} year${
+      mortgage.fixedPeriodYears === 1 ? "" : "s"
+    }`;
     const financingSummary = mortgage.interestOnly
-      ? `interest-only payments of ${formatCurrency(mortgage.monthlyPayment)} with ${formatCurrency(
+      ? `interest-only payments of ${formatCurrency(mortgage.monthlyPayment)} for ${mortgage.termYears} years with ${formatCurrency(
           mortgage.principal
         )} due at term end`
-      : `monthly payment ${formatCurrency(mortgage.monthlyPayment)}`;
+      : `monthly payment ${formatCurrency(mortgage.monthlyPayment)} over ${mortgage.termYears} years`;
     addHistoryEntry(
       `Mortgaged ${property.name}: Paid ${formatCurrency(deposit)} (${formatPercentage(
         mortgage.depositRatio
       )} deposit) and financed ${formatCurrency(
         property.cost - deposit
-      )} at ${interestRateLabel}% for ${mortgage.termYears} years (${financingSummary}).`
+      )} at fixed ${fixedRateLabel}% for ${fixedPeriodLabel} (reverts to base ${baseRateLabel}% + ${marginLabel}% = ${reversionRateLabel}%). Payments: ${financingSummary}.`
     );
     updateUI();
     return true;
@@ -1207,23 +1331,27 @@
       mortgageInfo.className = "small text-muted mb-3";
       const defaultDepositRatio = FINANCE_CONFIG.defaultDepositRatio;
       const defaultTermYears = FINANCE_CONFIG.defaultTermYears;
-      const previewRate = calculateDynamicInterestRate(
-        defaultDepositRatio,
-        defaultTermYears
-      );
+      const previewProfile = deriveMortgageRateProfile({
+        depositRatio: defaultDepositRatio,
+        termYears: defaultTermYears,
+      });
       const mortgagePreview = createMortgageForCost(property.cost, {
         depositRatio: defaultDepositRatio,
         termYears: defaultTermYears,
-        annualInterestRate: previewRate,
+        rateProfile: previewProfile,
       });
+      const fixedPeriodLabel = `${previewProfile.fixedPeriodYears} year${
+        previewProfile.fixedPeriodYears === 1 ? "" : "s"
+      }`;
       mortgageInfo.innerHTML = `
         <div>
           <strong>Finance preview:</strong>
           ${formatCurrency(mortgagePreview.deposit)} deposit (${formatPercentage(
             defaultDepositRatio
-          )}) → ${formatCurrency(mortgagePreview.monthlyPayment)} / month for ${
-        defaultTermYears
-      } years at ${(previewRate * 100).toFixed(2)}% APR.
+          )}) → ${formatCurrency(mortgagePreview.monthlyPayment)} / month over ${defaultTermYears} years.
+        </div>
+        <div class="mt-1">
+          Rate: fixed ${(previewProfile.fixedRate * 100).toFixed(2)}% for ${fixedPeriodLabel}, then base ${(previewProfile.baseRate * 100).toFixed(2)}% + ${(previewProfile.variableRateMargin * 100).toFixed(2)}% (${(previewProfile.reversionRate * 100).toFixed(2)}%).
         </div>
         <div class="mt-1">Adjust deposit (5%-50%) and term (2-25 years) in the financing panel.</div>
       `;
@@ -1328,18 +1456,20 @@
       if (elements.confirmFinanceButton) {
         elements.confirmFinanceButton.disabled = true;
       }
+      financeState.rateProfile = null;
       return;
     }
 
-    const annualInterestRate = calculateDynamicInterestRate(
-      financeState.depositRatio,
-      financeState.termYears
-    );
-    financeState.annualInterestRate = annualInterestRate;
+    const rateProfile = deriveMortgageRateProfile({
+      depositRatio: financeState.depositRatio,
+      termYears: financeState.termYears,
+    });
+    financeState.annualInterestRate = rateProfile.fixedRate;
+    financeState.rateProfile = rateProfile;
     const mortgage = createMortgageForCost(property.cost, {
       depositRatio: financeState.depositRatio,
       termYears: financeState.termYears,
-      annualInterestRate,
+      rateProfile,
     });
     const canAffordDeposit = state.balance >= mortgage.deposit;
 
@@ -1348,9 +1478,14 @@
         financeState.depositRatio
       )})</p>
       <p class="mb-1"><strong>Financed amount:</strong> ${formatCurrency(mortgage.principal)}</p>
-      <p class="mb-0"><strong>Payments:</strong> ${formatCurrency(
+      <p class="mb-1"><strong>Payments:</strong> ${formatCurrency(
         mortgage.monthlyPayment
-      )} / month for ${financeState.termYears} years at ${(annualInterestRate * 100).toFixed(2)}% APR</p>
+      )} / month over ${mortgage.termYears} years</p>
+      <p class="mb-0"><strong>Rate:</strong> Fixed ${(rateProfile.fixedRate * 100).toFixed(2)}% for ${
+        rateProfile.fixedPeriodYears
+      } year${rateProfile.fixedPeriodYears === 1 ? "" : "s"}, then base ${(rateProfile.baseRate * 100).toFixed(2)}% + ${(
+        rateProfile.variableRateMargin * 100
+      ).toFixed(2)}% (${(rateProfile.reversionRate * 100).toFixed(2)}%)</p>
     `;
 
     if (elements.financeAffordabilityNote) {
@@ -1573,6 +1708,9 @@
     initialiseGameState(false);
     addHistoryEntry("Game reset. Starting over with fresh capital.");
     addHistoryEntry("New game started with $1,000 in capital.");
+    addHistoryEntry(
+      `Central bank base rate set at ${(state.centralBankRate * 100).toFixed(2)}% to start the simulation.`
+    );
   }
 
   function wireUpFinanceModal() {
@@ -1618,16 +1756,20 @@
         if (!property) {
           return;
         }
+        const profile =
+          financeState.rateProfile ??
+          deriveMortgageRateProfile({
+            depositRatio: financeState.depositRatio,
+            termYears: financeState.termYears,
+          });
         const success = handleMortgagePurchase(property.id, {
           depositRatio: financeState.depositRatio,
           termYears: financeState.termYears,
-          annualInterestRate: calculateDynamicInterestRate(
-            financeState.depositRatio,
-            financeState.termYears
-          ),
+          rateProfile: profile,
         });
         if (success) {
           financeState.propertyId = null;
+          financeState.rateProfile = null;
           if (financeModalInstance) {
             financeModalInstance.hide();
           } else if (elements.financeModal) {
@@ -1640,6 +1782,7 @@
     if (elements.financeModal) {
       elements.financeModal.addEventListener("hidden.bs.modal", () => {
         financeState.propertyId = null;
+        financeState.rateProfile = null;
       });
     }
   }
