@@ -18,6 +18,13 @@ body {
   cursor: not-allowed;
 }
 
+#propertyList {
+  max-height: 65vh;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+  padding-bottom: 0.5rem;
+}
+
 #playerBalance {
   font-size: 1.5rem;
 }
