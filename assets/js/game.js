@@ -1,4 +1,6 @@
 (() => {
+  const DAYS_PER_MONTH = 30;
+
   const defaultProperties = [
     {
       id: "studio",
@@ -104,6 +106,40 @@
     "Concierge Service": 95,
   };
 
+  const MARKET_CONFIG = {
+    generationInterval: DAYS_PER_MONTH,
+    minimumListingsBeforeGeneration: 2,
+    targetListings: () => defaultProperties.length,
+  };
+
+  let propertyInstanceCounter = 0;
+
+  function createPropertyFromTemplate(template) {
+    propertyInstanceCounter += 1;
+
+    const features = [...(template.features ?? [])];
+    const location = { ...(template.location ?? {}) };
+
+    const baseProperty = {
+      ...template,
+      templateId: template.id,
+      features,
+      location,
+    };
+
+    const cost = calculatePropertyValue(baseProperty);
+    const annualYield = mapDemandToAnnualYield(baseProperty.demandScore);
+    const monthlyRent = Math.round((cost * annualYield) / 12);
+
+    return {
+      ...baseProperty,
+      id: `${template.id}-${propertyInstanceCounter}`,
+      cost,
+      annualYield,
+      monthlyRent,
+    };
+  }
+
   function calculatePropertyValue(property) {
     const weights = {
       base: 220,
@@ -149,6 +185,7 @@
     tickLength: 1000,
     timerId: null,
     lastRentCollectionDay: 0,
+    lastMarketGenerationDay: 1,
   };
 
   const elements = {};
@@ -197,27 +234,74 @@
   }
 
   function cloneDefaultProperties() {
-    return defaultProperties.map((property) => {
-      const cost = calculatePropertyValue(property);
-      const annualYield = mapDemandToAnnualYield(property.demandScore);
-      const monthlyRent = Math.round((cost * annualYield) / 12);
+    return defaultProperties.map((property) => createPropertyFromTemplate(property));
+  }
 
-      return {
-        ...property,
-        cost,
-        annualYield,
-        monthlyRent,
-      };
-    });
+  function getTemplatesMissingFromMarket() {
+    const activeTemplateIds = new Set(
+      state.market.map((property) => property.templateId ?? property.id)
+    );
+
+    return defaultProperties.filter((template) => !activeTemplateIds.has(template.id));
+  }
+
+  function progressMarketListings() {
+    const minimumListings = MARKET_CONFIG.minimumListingsBeforeGeneration;
+    if (state.market.length >= minimumListings) {
+      return;
+    }
+
+    const daysSinceGeneration = state.day - state.lastMarketGenerationDay;
+    const monthlyCycles = Math.floor(daysSinceGeneration / MARKET_CONFIG.generationInterval);
+
+    if (monthlyCycles < 1) {
+      return;
+    }
+
+    const missingTemplates = getTemplatesMissingFromMarket();
+    if (missingTemplates.length === 0) {
+      state.lastMarketGenerationDay += monthlyCycles * MARKET_CONFIG.generationInterval;
+      return;
+    }
+
+    const targetListings = MARKET_CONFIG.targetListings();
+    const listingsNeeded = Math.max(
+      0,
+      Math.min(targetListings, state.market.length + missingTemplates.length) - state.market.length
+    );
+
+    if (listingsNeeded === 0) {
+      state.lastMarketGenerationDay += monthlyCycles * MARKET_CONFIG.generationInterval;
+      return;
+    }
+
+    const newListings = missingTemplates
+      .slice(0, listingsNeeded)
+      .map((template) => createPropertyFromTemplate(template));
+
+    state.market.push(...newListings);
+
+    const monthStart = Math.floor(state.lastMarketGenerationDay / DAYS_PER_MONTH) + 1;
+    const monthEnd = monthStart + monthlyCycles - 1;
+    const monthRangeLabel = monthlyCycles > 1 ? `Months ${monthStart}-${monthEnd}` : `Month ${monthEnd}`;
+    const listingLabel = newListings.length === 1 ? "listing" : "listings";
+
+    addHistoryEntry(
+      `${monthRangeLabel} market refresh: Added ${newListings.length} new ${listingLabel} after the monthly review.`
+    );
+
+    state.lastMarketGenerationDay += monthlyCycles * MARKET_CONFIG.generationInterval;
   }
 
   function initialiseGameState(logInitialMessage = true) {
     state.balance = 1000;
     state.day = 1;
+    propertyInstanceCounter = 0;
     state.market = cloneDefaultProperties();
     state.portfolio = [];
     state.history = [];
     state.lastRentCollectionDay = 0;
+    state.lastMarketGenerationDay = state.day;
     if (logInitialMessage) {
       addHistoryEntry("New game started with $1,000 in capital.");
     } else {
@@ -255,20 +339,22 @@
   function handleDayTick() {
     state.day += 1;
     const daysSinceLastCollection = state.day - state.lastRentCollectionDay;
-    const monthsElapsed = Math.floor(daysSinceLastCollection / 30);
+    const monthsElapsed = Math.floor(daysSinceLastCollection / DAYS_PER_MONTH);
 
     if (monthsElapsed > 0) {
       const rentCollected = calculateRentPerMonth() * monthsElapsed;
       state.balance += rentCollected;
-      const startMonth = Math.floor(state.lastRentCollectionDay / 30) + 1;
+      const startMonth = Math.floor(state.lastRentCollectionDay / DAYS_PER_MONTH) + 1;
       const endMonth = startMonth + monthsElapsed - 1;
-      state.lastRentCollectionDay += monthsElapsed * 30;
+      state.lastRentCollectionDay += monthsElapsed * DAYS_PER_MONTH;
       const monthRange = monthsElapsed > 1 ? `${startMonth}-${endMonth}` : `${startMonth}`;
       const monthLabel = monthsElapsed > 1 ? `${monthsElapsed} months` : "1 month";
       addHistoryEntry(
         `Month${monthsElapsed > 1 ? "s" : ""} ${monthRange}: Collected ${formatCurrency(rentCollected)} in rent for ${monthLabel}.`
       );
     }
+
+    progressMarketListings();
 
     updateUI();
   }
