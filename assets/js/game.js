@@ -635,7 +635,7 @@
     elements.propertyList.innerHTML = "";
     state.market.forEach((property) => {
       const col = document.createElement("div");
-      col.className = "col-sm-6";
+      col.className = "col";
 
       const card = document.createElement("div");
       card.className = "card property-card h-100";
