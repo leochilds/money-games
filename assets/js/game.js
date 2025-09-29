@@ -723,58 +723,108 @@
   }
 
   function getMortgagePaymentBreakdown(mortgage) {
-    if (!mortgage || mortgage.remainingTermMonths <= 0 || mortgage.remainingBalance <= 0) {
-      return {
-        monthlyPayment: 0,
-        interestComponent: 0,
-        principalComponent: 0,
-        outstandingPrincipal: 0,
-        outstandingInterest: 0,
-        totalOutstanding: 0,
+    const emptyBreakdown = {
+      monthlyPayment: 0,
+      interestComponent: 0,
+      principalComponent: 0,
+      principalRemaining: 0,
+      fixedPeriod: {
+        monthsRemaining: 0,
         paymentsRemaining: 0,
-        isInterestOnly: Boolean(mortgage?.interestOnly),
-      };
-    }
+        totalInterestRemaining: 0,
+        totalPrincipalScheduled: 0,
+        totalPaymentsRemaining: 0,
+        projectedBalanceAfter: 0,
+      },
+      variablePhase: {
+        startsInMonths: 0,
+        isActive: false,
+        baseRate: mortgage?.baseRate ?? 0,
+        margin: mortgage?.variableRateMargin ?? 0,
+        reversionRate:
+          mortgage?.reversionRate ??
+          (mortgage?.baseRate ?? 0) + (mortgage?.variableRateMargin ?? 0),
+        estimatedPayment: 0,
+      },
+      isInterestOnly: Boolean(mortgage?.interestOnly),
+    };
 
-    if (mortgage.interestOnly) {
-      const outstandingPrincipal = roundCurrency(mortgage.remainingBalance);
-      const nextInterestDue = roundCurrency(outstandingPrincipal * mortgage.monthlyInterestRate);
-      const paymentsRemaining = Math.max(mortgage.remainingTermMonths, 0);
-      const monthlyPayment = paymentsRemaining > 0 ? nextInterestDue : outstandingPrincipal;
-      const outstandingInterest = roundCurrency(nextInterestDue * paymentsRemaining);
-
-      return {
-        monthlyPayment,
-        interestComponent: paymentsRemaining > 0 ? nextInterestDue : 0,
-        principalComponent: paymentsRemaining > 0 ? 0 : outstandingPrincipal,
-        outstandingPrincipal,
-        outstandingInterest,
-        totalOutstanding: roundCurrency(outstandingPrincipal + outstandingInterest),
-        paymentsRemaining,
-        isInterestOnly: true,
-      };
+    if (!mortgage || mortgage.remainingTermMonths <= 0 || mortgage.remainingBalance <= 0) {
+      return emptyBreakdown;
     }
 
     const outstandingPrincipal = roundCurrency(mortgage.remainingBalance);
     const nextInterestDue = roundCurrency(outstandingPrincipal * mortgage.monthlyInterestRate);
     const scheduledPayment = roundCurrency(mortgage.monthlyPayment);
     const totalDueNext = roundCurrency(outstandingPrincipal + nextInterestDue);
-    const monthlyPayment = Math.min(scheduledPayment, totalDueNext);
+    const monthlyPayment = mortgage.interestOnly
+      ? nextInterestDue
+      : Math.min(scheduledPayment, totalDueNext);
     const interestComponent = Math.min(nextInterestDue, monthlyPayment);
     const principalComponent = roundCurrency(Math.max(monthlyPayment - interestComponent, 0));
     const adjustedPrincipalComponent = Math.min(principalComponent, outstandingPrincipal);
 
+    const remainingTermMonths = Math.max(mortgage.remainingTermMonths ?? 0, 0);
+    const totalTermMonthsRaw = Number.isFinite(mortgage.termMonths)
+      ? mortgage.termMonths
+      : Math.round((mortgage.termYears ?? 0) * 12);
+    const totalTermMonths = Math.max(Math.round(totalTermMonthsRaw ?? 0), remainingTermMonths);
+    const fixedPeriodMonths = Math.max(
+      Math.round((mortgage.fixedPeriodYears ?? mortgage.termYears ?? 0) * 12),
+      0
+    );
+    const monthsElapsed = Math.max(totalTermMonths - remainingTermMonths, 0);
+    const fixedMonthsRemaining = Math.max(fixedPeriodMonths - monthsElapsed, 0);
+    const paymentsRemainingInFixed = Math.max(
+      Math.min(remainingTermMonths, fixedMonthsRemaining),
+      0
+    );
+
+    if (mortgage.interestOnly) {
+      const fixedInterestRemaining = roundCurrency(nextInterestDue * paymentsRemainingInFixed);
+      const paymentsRemaining = remainingTermMonths;
+      const fixedTotals = {
+        monthsRemaining: fixedMonthsRemaining,
+        paymentsRemaining: paymentsRemainingInFixed,
+        totalInterestRemaining: fixedInterestRemaining,
+        totalPrincipalScheduled: 0,
+        totalPaymentsRemaining: fixedInterestRemaining,
+        projectedBalanceAfter: outstandingPrincipal,
+      };
+
+      const variableStartsInMonths = Math.max(fixedMonthsRemaining, 0);
+      const monthsAfterFixed = Math.max(remainingTermMonths - paymentsRemainingInFixed, 0);
+      const variableAnnualRate =
+        mortgage.reversionRate ?? (mortgage.baseRate ?? 0) + (mortgage.variableRateMargin ?? 0);
+      const variableMonthlyRate = variableAnnualRate / 12;
+      const estimatedVariablePayment = monthsAfterFixed > 0
+        ? roundCurrency(outstandingPrincipal * variableMonthlyRate)
+        : 0;
+
+      return {
+        monthlyPayment: paymentsRemaining > 0 ? nextInterestDue : outstandingPrincipal,
+        interestComponent: paymentsRemaining > 0 ? nextInterestDue : 0,
+        principalComponent: paymentsRemaining > 0 ? 0 : outstandingPrincipal,
+        principalRemaining: outstandingPrincipal,
+        fixedPeriod: fixedTotals,
+        variablePhase: {
+          startsInMonths: variableStartsInMonths,
+          isActive: paymentsRemainingInFixed <= 0 && mortgage.remainingBalance > 0,
+          baseRate: mortgage.baseRate,
+          margin: mortgage.variableRateMargin,
+          reversionRate: variableAnnualRate,
+          estimatedPayment: estimatedVariablePayment,
+        },
+        isInterestOnly: true,
+      };
+    }
+
     let simulatedBalance = outstandingPrincipal;
-    let simulatedTerm = mortgage.remainingTermMonths;
     let projectedInterestCents = 0;
+    let projectedPrincipalCents = 0;
     let projectedPayments = 0;
-    const maxIterations = Math.max(simulatedTerm + 120, 1);
 
-    while (simulatedBalance > 0 && projectedPayments < maxIterations) {
-      if (simulatedTerm <= 0 && simulatedBalance > 0) {
-        simulatedTerm = 1;
-      }
-
+    while (simulatedBalance > 0 && projectedPayments < paymentsRemainingInFixed) {
       const interestDue = roundCurrency(simulatedBalance * mortgage.monthlyInterestRate);
       projectedInterestCents += Math.round(interestDue * 100);
 
@@ -789,8 +839,8 @@
         simulatedBalance
       );
 
+      projectedPrincipalCents += Math.round(principalPaid * 100);
       simulatedBalance = roundCurrency(simulatedBalance - principalPaid);
-      simulatedTerm -= 1;
       projectedPayments += 1;
 
       if (simulatedBalance <= 0.005) {
@@ -799,24 +849,46 @@
       }
     }
 
-    if (simulatedBalance > 0) {
-      const interestDue = roundCurrency(simulatedBalance * mortgage.monthlyInterestRate);
-      projectedInterestCents += Math.round(interestDue * 100);
-      projectedPayments += 1;
-      simulatedBalance = 0;
-    }
+    const fixedInterestRemaining = roundCurrency(projectedInterestCents / 100);
+    const fixedPrincipalScheduled = roundCurrency(projectedPrincipalCents / 100);
+    const fixedTotals = {
+      monthsRemaining: fixedMonthsRemaining,
+      paymentsRemaining: paymentsRemainingInFixed,
+      totalInterestRemaining: fixedInterestRemaining,
+      totalPrincipalScheduled: fixedPrincipalScheduled,
+      totalPaymentsRemaining: roundCurrency((projectedInterestCents + projectedPrincipalCents) / 100),
+      projectedBalanceAfter: simulatedBalance,
+    };
 
-    const outstandingInterest = roundCurrency(projectedInterestCents / 100);
-    const paymentsRemaining = projectedPayments;
+    const monthsAfterFixed = Math.max(remainingTermMonths - paymentsRemainingInFixed, 0);
+    let estimatedVariablePayment = 0;
+    if (monthsAfterFixed > 0 && simulatedBalance > 0) {
+      const remainingYearsAfterFixed = monthsAfterFixed / 12;
+      const reversionRate =
+        mortgage.reversionRate ?? (mortgage.baseRate ?? 0) + (mortgage.variableRateMargin ?? 0);
+      estimatedVariablePayment = calculateMortgageMonthlyPayment(
+        simulatedBalance,
+        reversionRate,
+        remainingYearsAfterFixed
+      );
+    }
 
     return {
       monthlyPayment,
       interestComponent,
       principalComponent: adjustedPrincipalComponent,
-      outstandingPrincipal,
-      outstandingInterest,
-      totalOutstanding: roundCurrency(outstandingPrincipal + outstandingInterest),
-      paymentsRemaining,
+      principalRemaining: outstandingPrincipal,
+      fixedPeriod: fixedTotals,
+      variablePhase: {
+        startsInMonths: Math.max(fixedMonthsRemaining, 0),
+        isActive: paymentsRemainingInFixed <= 0 && mortgage.remainingBalance > 0,
+        baseRate: mortgage.baseRate,
+        margin: mortgage.variableRateMargin,
+        reversionRate:
+          mortgage.reversionRate ??
+          (mortgage.baseRate ?? 0) + (mortgage.variableRateMargin ?? 0),
+        estimatedPayment: estimatedVariablePayment,
+      },
       isInterestOnly: false,
     };
   }
@@ -1231,8 +1303,8 @@
     let outstandingInterest = 0;
     if (property.mortgage && property.mortgage.remainingBalance > 0) {
       const breakdown = getMortgagePaymentBreakdown(property.mortgage);
-      mortgagePayoff = breakdown.outstandingPrincipal;
-      outstandingInterest = breakdown.outstandingInterest;
+      mortgagePayoff = breakdown.principalRemaining;
+      outstandingInterest = breakdown.fixedPeriod?.totalInterestRemaining ?? 0;
     }
 
     const totalMortgageSettlement = roundCurrency(mortgagePayoff);
@@ -1248,7 +1320,7 @@
       if (outstandingInterest > 0) {
         historyMessage += ` Avoided ${formatCurrency(
           outstandingInterest
-        )} in future interest charges.`;
+        )} in upcoming fixed-period interest charges.`;
       }
       addHistoryEntry(historyMessage);
     } else {
@@ -1592,6 +1664,26 @@
       if (mortgage) {
         mortgageBreakdown = getMortgagePaymentBreakdown(mortgage);
         const breakdown = mortgageBreakdown;
+        const fixedTotals = breakdown.fixedPeriod ?? {};
+        const variablePhase = breakdown.variablePhase ?? {};
+
+        const formatCountdown = (months) => {
+          if (!Number.isFinite(months) || months <= 0) {
+            return "0 months";
+          }
+          const wholeMonths = Math.round(months);
+          const years = Math.floor(wholeMonths / 12);
+          const remainingMonths = wholeMonths % 12;
+          const parts = [];
+          if (years > 0) {
+            parts.push(`${years} year${years === 1 ? "" : "s"}`);
+          }
+          if (remainingMonths > 0 || parts.length === 0) {
+            parts.push(`${remainingMonths} month${remainingMonths === 1 ? "" : "s"}`);
+          }
+          return parts.join(" ");
+        };
+
         const summaryLine = document.createElement("div");
         if (breakdown.isInterestOnly) {
           summaryLine.textContent = `Rent ${formatCurrency(
@@ -1603,17 +1695,36 @@
           )} / month`;
         }
 
-        const outstandingLine = document.createElement("div");
+        const principalLine = document.createElement("div");
         if (breakdown.isInterestOnly) {
-          outstandingLine.textContent = `Principal due at end: ${formatCurrency(
-            breakdown.outstandingPrincipal
-          )} (remaining interest ${formatCurrency(breakdown.outstandingInterest)})`;
+          principalLine.textContent = `Principal outstanding: ${formatCurrency(
+            breakdown.principalRemaining
+          )} (due after interest-only term)`;
         } else {
-          outstandingLine.textContent = `Outstanding: ${formatCurrency(
-            breakdown.outstandingPrincipal
-          )} loan + ${formatCurrency(breakdown.outstandingInterest)} interest (${formatCurrency(
-            breakdown.totalOutstanding
-          )} total)`;
+          principalLine.textContent = `Principal remaining: ${formatCurrency(
+            breakdown.principalRemaining
+          )}`;
+        }
+
+        const fixedPeriodLine = document.createElement("div");
+        if (breakdown.isInterestOnly) {
+          if ((fixedTotals.paymentsRemaining ?? 0) > 0) {
+            const plural = fixedTotals.paymentsRemaining === 1 ? "" : "s";
+            fixedPeriodLine.textContent = `Fixed period: ${fixedTotals.paymentsRemaining} payment${plural} left (${formatCurrency(
+              fixedTotals.totalPaymentsRemaining ?? 0
+            )} interest remaining).`;
+          } else {
+            fixedPeriodLine.textContent = `Interest-only fixed period complete; principal will roll onto variable terms.`;
+          }
+        } else if ((fixedTotals.paymentsRemaining ?? 0) > 0) {
+          const plural = fixedTotals.paymentsRemaining === 1 ? "" : "s";
+          fixedPeriodLine.textContent = `Fixed period: ${fixedTotals.paymentsRemaining} payment${plural} left (${formatCurrency(
+            fixedTotals.totalPrincipalScheduled ?? 0
+          )} principal + ${formatCurrency(fixedTotals.totalInterestRemaining ?? 0)} interest).`;
+        } else {
+          fixedPeriodLine.textContent = `Fixed period finished; ${formatCurrency(
+            fixedTotals.projectedBalanceAfter ?? breakdown.principalRemaining
+          )} principal continues on variable rate.`;
         }
 
         const paymentSplitLine = document.createElement("div");
@@ -1624,22 +1735,40 @@
         } else {
           paymentSplitLine.textContent = `This month's payment: ${formatCurrency(
             breakdown.principalComponent
-          )} loan + ${formatCurrency(breakdown.interestComponent)} interest`;
+          )} principal + ${formatCurrency(breakdown.interestComponent)} interest`;
         }
 
-        const paymentsRemainingLine = document.createElement("div");
-        if (breakdown.isInterestOnly) {
-          const plural = breakdown.paymentsRemaining === 1 ? "" : "s";
-          paymentsRemainingLine.textContent = `${breakdown.paymentsRemaining} interest payment${plural} before principal due`;
+        const variableLine = document.createElement("div");
+        const baseRate = Number.isFinite(variablePhase.baseRate) ? variablePhase.baseRate : 0;
+        const margin = Number.isFinite(variablePhase.margin) ? variablePhase.margin : 0;
+        const reversionRate = Number.isFinite(variablePhase.reversionRate)
+          ? variablePhase.reversionRate
+          : baseRate + margin;
+        const estimatedPayment = variablePhase.estimatedPayment ?? 0;
+
+        if (variablePhase.isActive) {
+          let message = `Variable margin active at ${(reversionRate * 100).toFixed(2)}% (${(baseRate * 100).toFixed(2)}% base + ${(margin * 100).toFixed(2)}% margin).`;
+          if (estimatedPayment > 0) {
+            message += ` Estimated payment ${formatCurrency(estimatedPayment)} / month.`;
+          }
+          variableLine.textContent = message;
+        } else if ((variablePhase.startsInMonths ?? 0) > 0) {
+          const countdownLabel = formatCountdown(variablePhase.startsInMonths ?? 0);
+          let message = `Variable rate ${(reversionRate * 100).toFixed(2)}% begins in ${countdownLabel} (${(baseRate * 100).toFixed(2)}% base + ${(margin * 100).toFixed(2)}% margin).`;
+          if (estimatedPayment > 0) {
+            message += ` Estimated payment ${formatCurrency(estimatedPayment)} / month.`;
+          }
+          variableLine.textContent = message;
         } else {
-          paymentsRemainingLine.textContent = `${breakdown.paymentsRemaining} payments remaining`;
+          variableLine.textContent = `Variable margin available at ${(reversionRate * 100).toFixed(2)}% (${(baseRate * 100).toFixed(2)}% base + ${(margin * 100).toFixed(2)}% margin).`;
         }
 
         cashflowDetails.append(
           summaryLine,
-          outstandingLine,
+          principalLine,
+          fixedPeriodLine,
           paymentSplitLine,
-          paymentsRemainingLine
+          variableLine
         );
       } else {
         const summaryLine = document.createElement("div");
@@ -1660,7 +1789,7 @@
       const salePrice = calculateSalePrice(property);
       let netSaleLabel = `Sell for ${formatCurrency(salePrice)}`;
       if (mortgageBreakdown) {
-        const settlement = mortgageBreakdown.outstandingPrincipal ?? mortgageBreakdown.totalOutstanding;
+        const settlement = mortgageBreakdown.principalRemaining ?? 0;
         if (settlement > 0) {
           const netProceeds = roundCurrency(salePrice - settlement);
           netSaleLabel = `Sell for ${formatCurrency(salePrice)} (net ${formatCurrency(netProceeds)})`;
