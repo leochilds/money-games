@@ -88,26 +88,15 @@
     high: 0.88,
   };
 
-  const MORTGAGE_PRODUCTS = {
-    repayment: {
-      key: "repayment",
-      label: "Repayment mortgage",
-      depositRatio: 0.25,
-      termYears: 25,
-      annualInterestRate: 0.045,
-      interestOnly: false,
-    },
-    interest_only: {
-      key: "interest_only",
-      label: "Interest-only mortgage",
-      depositRatio: 0.25,
-      termYears: 25,
-      annualInterestRate: 0.0525,
-      interestOnly: true,
-    },
+  const FINANCE_CONFIG = {
+    depositOptions: [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5],
+    termOptions: [2, 5, 10, 25],
+    defaultDepositRatio: 0.2,
+    defaultTermYears: 25,
+    minimumRate: 0.025,
+    maximumRate: 0.085,
+    baseRate: 0.0375,
   };
-
-  const AVAILABLE_MORTGAGE_PRODUCTS = Object.values(MORTGAGE_PRODUCTS);
 
   const featureAddOns = {
     "City View": 60,
@@ -322,6 +311,15 @@
 
   const elements = {};
 
+  const financeState = {
+    propertyId: null,
+    depositRatio: FINANCE_CONFIG.defaultDepositRatio,
+    termYears: FINANCE_CONFIG.defaultTermYears,
+    annualInterestRate: FINANCE_CONFIG.baseRate,
+  };
+
+  let financeModalInstance = null;
+
   let generatedIdCounter = 1;
 
   function getRandomInt(min, max) {
@@ -507,6 +505,14 @@
     elements.historyLog = document.getElementById("historyLog");
     elements.resetButton = document.getElementById("resetButton");
     elements.speedControl = document.getElementById("speedControl");
+    elements.financeModal = document.getElementById("financePropertyModal");
+    elements.financePropertyName = document.getElementById("financePropertyName");
+    elements.financePropertySummary = document.getElementById("financePropertySummary");
+    elements.financeDepositOptions = document.getElementById("financeDepositOptions");
+    elements.financeTermOptions = document.getElementById("financeTermOptions");
+    elements.financePaymentPreview = document.getElementById("financePaymentPreview");
+    elements.financeAffordabilityNote = document.getElementById("financeAffordabilityNote");
+    elements.confirmFinanceButton = document.getElementById("confirmFinanceButton");
   }
 
   function formatCurrency(amount) {
@@ -532,16 +538,35 @@
     return propertyTypeLabels[type] ?? type;
   }
 
-  function getMortgageProduct(key) {
-    return MORTGAGE_PRODUCTS[key] ?? MORTGAGE_PRODUCTS.repayment;
+  function formatPercentage(value) {
+    if (!Number.isFinite(value)) {
+      return "-";
+    }
+    return `${Math.round(value * 100)}%`;
   }
 
-  function calculateMortgageDeposit(cost, productKey = "repayment") {
+  function calculateDynamicInterestRate(depositRatio, termYears) {
+    const minOption = FINANCE_CONFIG.depositOptions[0];
+    const maxOption = FINANCE_CONFIG.depositOptions[FINANCE_CONFIG.depositOptions.length - 1];
+    const ratio = Number.isFinite(depositRatio)
+      ? Math.min(Math.max(depositRatio, minOption), maxOption)
+      : FINANCE_CONFIG.defaultDepositRatio;
+    const years = Number.isFinite(termYears) ? Math.max(termYears, 1) : FINANCE_CONFIG.defaultTermYears;
+    const depositAdjustment = (FINANCE_CONFIG.defaultDepositRatio - ratio) * 0.4;
+    const termAdjustment = (years - 10) * 0.0015;
+    const rawRate = FINANCE_CONFIG.baseRate + depositAdjustment + termAdjustment;
+    return Math.min(
+      FINANCE_CONFIG.maximumRate,
+      Math.max(FINANCE_CONFIG.minimumRate, Math.round(rawRate * 10000) / 10000)
+    );
+  }
+
+  function calculateMortgageDeposit(cost, depositRatio = FINANCE_CONFIG.defaultDepositRatio) {
     if (!Number.isFinite(cost)) {
       return 0;
     }
-    const product = getMortgageProduct(productKey);
-    return Math.round(cost * product.depositRatio);
+    const ratio = Number.isFinite(depositRatio) ? depositRatio : FINANCE_CONFIG.defaultDepositRatio;
+    return roundCurrency(cost * ratio);
   }
 
   function calculateMortgageMonthlyPayment(principal, annualInterestRate, termYears) {
@@ -565,37 +590,49 @@
     return roundCurrency(payment);
   }
 
-  function createMortgageForCost(cost, productKey = "repayment") {
-    const product = getMortgageProduct(productKey);
-    const deposit = calculateMortgageDeposit(cost, productKey);
+  function createMortgageForCost(
+    cost,
+    {
+      depositRatio = FINANCE_CONFIG.defaultDepositRatio,
+      termYears = FINANCE_CONFIG.defaultTermYears,
+      annualInterestRate,
+      interestOnly = false,
+    } = {}
+  ) {
+    const deposit = calculateMortgageDeposit(cost, depositRatio);
     const principal = Math.max(cost - deposit, 0);
-    const termMonths = Math.round(product.termYears * 12);
-    const monthlyRate = product.annualInterestRate / 12;
+    const termMonths = Math.round((Number.isFinite(termYears) ? termYears : FINANCE_CONFIG.defaultTermYears) * 12);
+    const resolvedTermYears = termMonths / 12;
+    const rate = Number.isFinite(annualInterestRate)
+      ? annualInterestRate
+      : calculateDynamicInterestRate(depositRatio, resolvedTermYears);
+    const monthlyRate = rate / 12;
     let monthlyPayment;
 
-    if (product.interestOnly) {
+    if (interestOnly) {
       monthlyPayment = roundCurrency(principal * monthlyRate);
     } else {
       monthlyPayment = calculateMortgageMonthlyPayment(
         principal,
-        product.annualInterestRate,
-        product.termYears
+        rate,
+        resolvedTermYears
       );
     }
 
     return {
       deposit,
       principal,
-      termYears: product.termYears,
+      termYears: resolvedTermYears,
       termMonths,
-      annualInterestRate: product.annualInterestRate,
+      annualInterestRate: rate,
       monthlyInterestRate: monthlyRate,
       monthlyPayment,
       remainingBalance: principal,
       remainingTermMonths: termMonths,
-      interestOnly: Boolean(product.interestOnly),
-      productKey,
-      productLabel: product.label,
+      interestOnly: Boolean(interestOnly),
+      depositRatio,
+      productKey: null,
+      productLabel: "Custom mortgage",
     };
   }
 
@@ -1002,24 +1039,39 @@
     updateUI();
   }
 
-  function handleMortgagePurchase(propertyId, productKey = "repayment") {
+  function handleMortgagePurchase(
+    propertyId,
+    {
+      depositRatio = FINANCE_CONFIG.defaultDepositRatio,
+      termYears = FINANCE_CONFIG.defaultTermYears,
+      annualInterestRate,
+      interestOnly = false,
+    } = {}
+  ) {
     const propertyIndex = state.market.findIndex((item) => item.id === propertyId);
     if (propertyIndex === -1) {
-      return;
+      return false;
     }
 
     const property = state.market[propertyIndex];
-    const product = getMortgageProduct(productKey);
-    const mortgage = createMortgageForCost(property.cost, productKey);
+    const resolvedRate = Number.isFinite(annualInterestRate)
+      ? annualInterestRate
+      : calculateDynamicInterestRate(depositRatio, termYears);
+    const mortgage = createMortgageForCost(property.cost, {
+      depositRatio,
+      termYears,
+      annualInterestRate: resolvedRate,
+      interestOnly,
+    });
     const deposit = mortgage.deposit;
 
     if (state.balance < deposit) {
       addHistoryEntry(
-        `Attempted to take a ${product.label.toLowerCase()} on ${property.name} but lacked the ${formatCurrency(
-          deposit
-        )} deposit.`
+        `Attempted to finance ${property.name} with a ${formatPercentage(
+          depositRatio
+        )} deposit but lacked the ${formatCurrency(deposit)} required upfront.`
       );
-      return;
+      return false;
     }
 
     state.balance -= deposit;
@@ -1033,13 +1085,14 @@
         )} due at term end`
       : `monthly payment ${formatCurrency(mortgage.monthlyPayment)}`;
     addHistoryEntry(
-      `Mortgaged ${property.name}: Paid ${formatCurrency(deposit)} deposit and financed ${formatCurrency(
+      `Mortgaged ${property.name}: Paid ${formatCurrency(deposit)} (${formatPercentage(
+        mortgage.depositRatio
+      )} deposit) and financed ${formatCurrency(
         property.cost - deposit
-      )} via a ${product.label.toLowerCase()} at ${interestRateLabel}% for ${
-        mortgage.termYears
-      } years (${financingSummary}).`
+      )} at ${interestRateLabel}% for ${mortgage.termYears} years (${financingSummary}).`
     );
     updateUI();
+    return true;
   }
 
   function handleSale(propertyId) {
@@ -1150,27 +1203,30 @@
         property.monthlyRent
       )}`;
 
-      const mortgagePreviews = AVAILABLE_MORTGAGE_PRODUCTS.map((product) => ({
-        product,
-        preview: createMortgageForCost(property.cost, product.key),
-      }));
-
       const mortgageInfo = document.createElement("div");
       mortgageInfo.className = "small text-muted mb-3";
-      mortgageInfo.innerHTML = mortgagePreviews
-        .map(({ product, preview }) => {
-          const rateLabel = (product.annualInterestRate * 100).toFixed(2);
-          const monthlyLabel = product.interestOnly
-            ? `${formatCurrency(preview.monthlyPayment)} interest`
-            : `${formatCurrency(preview.monthlyPayment)} / month`;
-          const suffix = product.interestOnly
-            ? " (principal due at end)"
-            : "";
-          return `<div><strong>${product.label}:</strong> ${formatCurrency(
-            preview.deposit
-          )} deposit, ${monthlyLabel} for ${product.termYears} years at ${rateLabel}%${suffix}</div>`;
-        })
-        .join("");
+      const defaultDepositRatio = FINANCE_CONFIG.defaultDepositRatio;
+      const defaultTermYears = FINANCE_CONFIG.defaultTermYears;
+      const previewRate = calculateDynamicInterestRate(
+        defaultDepositRatio,
+        defaultTermYears
+      );
+      const mortgagePreview = createMortgageForCost(property.cost, {
+        depositRatio: defaultDepositRatio,
+        termYears: defaultTermYears,
+        annualInterestRate: previewRate,
+      });
+      mortgageInfo.innerHTML = `
+        <div>
+          <strong>Finance preview:</strong>
+          ${formatCurrency(mortgagePreview.deposit)} deposit (${formatPercentage(
+            defaultDepositRatio
+          )}) → ${formatCurrency(mortgagePreview.monthlyPayment)} / month for ${
+        defaultTermYears
+      } years at ${(previewRate * 100).toFixed(2)}% APR.
+        </div>
+        <div class="mt-1">Adjust deposit (5%-50%) and term (2-25 years) in the financing panel.</div>
+      `;
 
       const buttonGroup = document.createElement("div");
       buttonGroup.className = "d-grid gap-2 mt-auto";
@@ -1182,22 +1238,13 @@
       cashButton.disabled = state.balance < property.cost;
       cashButton.addEventListener("click", () => handleCashPurchase(property.id));
 
-      const mortgageButtons = mortgagePreviews.map(({ product, preview }) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = product.interestOnly ? "btn btn-warning" : "btn btn-primary";
-        const buttonLabel = product.interestOnly
-          ? `Interest-only (Pay ${formatCurrency(preview.deposit)})`
-          : `Mortgage (Pay ${formatCurrency(preview.deposit)})`;
-        button.textContent = buttonLabel;
-        button.disabled = state.balance < preview.deposit;
-        button.addEventListener("click", () =>
-          handleMortgagePurchase(property.id, product.key)
-        );
-        return button;
-      });
+      const financeButton = document.createElement("button");
+      financeButton.type = "button";
+      financeButton.className = "btn btn-primary";
+      financeButton.textContent = "Finance property";
+      financeButton.addEventListener("click", () => openFinanceModal(property.id));
 
-      buttonGroup.append(cashButton, ...mortgageButtons);
+      buttonGroup.append(cashButton, financeButton);
 
       const detailSection = document.createElement("div");
       detailSection.className = "mb-3 flex-grow-1";
@@ -1214,6 +1261,161 @@
       col.append(card);
       elements.propertyList.append(col);
     });
+  }
+
+  function getActiveFinanceProperty() {
+    if (!financeState.propertyId) {
+      return null;
+    }
+    return (
+      state.market.find((property) => property.id === financeState.propertyId) ?? null
+    );
+  }
+
+  function renderFinanceDepositOptions(property) {
+    if (!elements.financeDepositOptions) {
+      return;
+    }
+    elements.financeDepositOptions.innerHTML = FINANCE_CONFIG.depositOptions
+      .map((ratio) => {
+        const depositAmount = calculateMortgageDeposit(property.cost, ratio);
+        const isActive = Math.abs(ratio - financeState.depositRatio) < 1e-6;
+        return `
+          <button
+            type="button"
+            class="btn btn-outline-primary${isActive ? " active" : ""}"
+            data-deposit-ratio="${ratio}"
+            aria-pressed="${isActive}"
+          >
+            ${formatPercentage(ratio)} (${formatCurrency(depositAmount)})
+          </button>
+        `;
+      })
+      .join("");
+  }
+
+  function renderFinanceTermOptions() {
+    if (!elements.financeTermOptions) {
+      return;
+    }
+    elements.financeTermOptions.innerHTML = FINANCE_CONFIG.termOptions
+      .map((years) => {
+        const isActive = Math.abs(years - financeState.termYears) < 1e-6;
+        return `
+          <button
+            type="button"
+            class="btn btn-outline-secondary${isActive ? " active" : ""}"
+            data-term-years="${years}"
+            aria-pressed="${isActive}"
+          >
+            ${years} years
+          </button>
+        `;
+      })
+      .join("");
+  }
+
+  function updateFinancePreview() {
+    if (!elements.financePaymentPreview) {
+      return;
+    }
+    const property = getActiveFinanceProperty();
+    if (!property) {
+      elements.financePaymentPreview.textContent = "Select a property to view payment details.";
+      if (elements.financeAffordabilityNote) {
+        elements.financeAffordabilityNote.textContent = "";
+      }
+      if (elements.confirmFinanceButton) {
+        elements.confirmFinanceButton.disabled = true;
+      }
+      return;
+    }
+
+    const annualInterestRate = calculateDynamicInterestRate(
+      financeState.depositRatio,
+      financeState.termYears
+    );
+    financeState.annualInterestRate = annualInterestRate;
+    const mortgage = createMortgageForCost(property.cost, {
+      depositRatio: financeState.depositRatio,
+      termYears: financeState.termYears,
+      annualInterestRate,
+    });
+    const canAffordDeposit = state.balance >= mortgage.deposit;
+
+    elements.financePaymentPreview.innerHTML = `
+      <p class="mb-1"><strong>Deposit:</strong> ${formatCurrency(mortgage.deposit)} (${formatPercentage(
+        financeState.depositRatio
+      )})</p>
+      <p class="mb-1"><strong>Financed amount:</strong> ${formatCurrency(mortgage.principal)}</p>
+      <p class="mb-0"><strong>Payments:</strong> ${formatCurrency(
+        mortgage.monthlyPayment
+      )} / month for ${financeState.termYears} years at ${(annualInterestRate * 100).toFixed(2)}% APR</p>
+    `;
+
+    if (elements.financeAffordabilityNote) {
+      elements.financeAffordabilityNote.textContent = canAffordDeposit
+        ? `You can cover the deposit and will have ${formatCurrency(
+            roundCurrency(state.balance - mortgage.deposit)
+          )} remaining.`
+        : `You need ${formatCurrency(
+            roundCurrency(mortgage.deposit - state.balance)
+          )} more to cover the selected deposit.`;
+      elements.financeAffordabilityNote.className = `small mt-2 ${canAffordDeposit ? "text-success" : "text-danger"}`;
+    }
+
+    if (elements.confirmFinanceButton) {
+      elements.confirmFinanceButton.disabled = !canAffordDeposit;
+    }
+  }
+
+  function openFinanceModal(propertyId) {
+    if (!elements.financeModal) {
+      return;
+    }
+    const property = state.market.find((item) => item.id === propertyId);
+    if (!property) {
+      return;
+    }
+
+    financeState.propertyId = propertyId;
+    if (
+      !FINANCE_CONFIG.depositOptions.some(
+        (ratio) => Math.abs(ratio - financeState.depositRatio) < 1e-6
+      )
+    ) {
+      financeState.depositRatio = FINANCE_CONFIG.defaultDepositRatio;
+    }
+    if (
+      !FINANCE_CONFIG.termOptions.some((years) => Math.abs(years - financeState.termYears) < 1e-6)
+    ) {
+      financeState.termYears = FINANCE_CONFIG.defaultTermYears;
+    }
+
+    if (elements.financePropertyName) {
+      elements.financePropertyName.textContent = property.name;
+    }
+    if (elements.financePropertySummary) {
+      elements.financePropertySummary.textContent = `Price ${formatCurrency(
+        property.cost
+      )} · Rent ${formatCurrency(property.monthlyRent)} / month`;
+    }
+
+    renderFinanceDepositOptions(property);
+    renderFinanceTermOptions();
+    updateFinancePreview();
+
+    if (!financeModalInstance && window.bootstrap?.Modal) {
+      financeModalInstance = new window.bootstrap.Modal(elements.financeModal, {
+        backdrop: "static",
+      });
+    }
+
+    if (financeModalInstance) {
+      financeModalInstance.show();
+    } else {
+      elements.financeModal.classList.add("show", "d-block");
+    }
   }
 
   function renderIncomeStatus() {
@@ -1373,12 +1575,82 @@
     addHistoryEntry("New game started with $1,000 in capital.");
   }
 
+  function wireUpFinanceModal() {
+    if (elements.financeDepositOptions) {
+      elements.financeDepositOptions.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-deposit-ratio]");
+        if (!button) {
+          return;
+        }
+        const ratio = Number.parseFloat(button.dataset.depositRatio);
+        if (!Number.isFinite(ratio)) {
+          return;
+        }
+        financeState.depositRatio = ratio;
+        const property = getActiveFinanceProperty();
+        if (property) {
+          renderFinanceDepositOptions(property);
+        }
+        updateFinancePreview();
+      });
+    }
+
+    if (elements.financeTermOptions) {
+      elements.financeTermOptions.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-term-years]");
+        if (!button) {
+          return;
+        }
+        const years = Number.parseInt(button.dataset.termYears, 10);
+        if (!Number.isFinite(years)) {
+          return;
+        }
+        financeState.termYears = years;
+        renderFinanceTermOptions();
+        updateFinancePreview();
+      });
+    }
+
+    if (elements.confirmFinanceButton) {
+      elements.confirmFinanceButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        const property = getActiveFinanceProperty();
+        if (!property) {
+          return;
+        }
+        const success = handleMortgagePurchase(property.id, {
+          depositRatio: financeState.depositRatio,
+          termYears: financeState.termYears,
+          annualInterestRate: calculateDynamicInterestRate(
+            financeState.depositRatio,
+            financeState.termYears
+          ),
+        });
+        if (success) {
+          financeState.propertyId = null;
+          if (financeModalInstance) {
+            financeModalInstance.hide();
+          } else if (elements.financeModal) {
+            elements.financeModal.classList.remove("show", "d-block");
+          }
+        }
+      });
+    }
+
+    if (elements.financeModal) {
+      elements.financeModal.addEventListener("hidden.bs.modal", () => {
+        financeState.propertyId = null;
+      });
+    }
+  }
+
   function wireUpEvents() {
     elements.resetButton.addEventListener("click", () => {
       resetGame();
     });
 
     elements.speedControl.addEventListener("change", handleSpeedChange);
+    wireUpFinanceModal();
   }
 
   document.addEventListener("DOMContentLoaded", () => {
