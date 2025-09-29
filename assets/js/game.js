@@ -88,11 +88,26 @@
     high: 0.88,
   };
 
-  const MORTGAGE_CONFIG = {
-    depositRatio: 0.25,
-    termYears: 25,
-    annualInterestRate: 0.045,
+  const MORTGAGE_PRODUCTS = {
+    repayment: {
+      key: "repayment",
+      label: "Repayment mortgage",
+      depositRatio: 0.25,
+      termYears: 25,
+      annualInterestRate: 0.045,
+      interestOnly: false,
+    },
+    interest_only: {
+      key: "interest_only",
+      label: "Interest-only mortgage",
+      depositRatio: 0.25,
+      termYears: 25,
+      annualInterestRate: 0.0525,
+      interestOnly: true,
+    },
   };
+
+  const AVAILABLE_MORTGAGE_PRODUCTS = Object.values(MORTGAGE_PRODUCTS);
 
   const featureAddOns = {
     "City View": 60,
@@ -517,11 +532,16 @@
     return propertyTypeLabels[type] ?? type;
   }
 
-  function calculateMortgageDeposit(cost) {
+  function getMortgageProduct(key) {
+    return MORTGAGE_PRODUCTS[key] ?? MORTGAGE_PRODUCTS.repayment;
+  }
+
+  function calculateMortgageDeposit(cost, productKey = "repayment") {
     if (!Number.isFinite(cost)) {
       return 0;
     }
-    return Math.round(cost * MORTGAGE_CONFIG.depositRatio);
+    const product = getMortgageProduct(productKey);
+    return Math.round(cost * product.depositRatio);
   }
 
   function calculateMortgageMonthlyPayment(principal, annualInterestRate, termYears) {
@@ -545,33 +565,50 @@
     return roundCurrency(payment);
   }
 
-  function createMortgageForCost(cost) {
-    const deposit = calculateMortgageDeposit(cost);
+  function createMortgageForCost(cost, productKey = "repayment") {
+    const product = getMortgageProduct(productKey);
+    const deposit = calculateMortgageDeposit(cost, productKey);
     const principal = Math.max(cost - deposit, 0);
-    const termMonths = Math.round(MORTGAGE_CONFIG.termYears * 12);
-    const monthlyRate = MORTGAGE_CONFIG.annualInterestRate / 12;
-    const monthlyPayment = calculateMortgageMonthlyPayment(
-      principal,
-      MORTGAGE_CONFIG.annualInterestRate,
-      MORTGAGE_CONFIG.termYears
-    );
+    const termMonths = Math.round(product.termYears * 12);
+    const monthlyRate = product.annualInterestRate / 12;
+    let monthlyPayment;
+
+    if (product.interestOnly) {
+      monthlyPayment = roundCurrency(principal * monthlyRate);
+    } else {
+      monthlyPayment = calculateMortgageMonthlyPayment(
+        principal,
+        product.annualInterestRate,
+        product.termYears
+      );
+    }
 
     return {
       deposit,
       principal,
-      termYears: MORTGAGE_CONFIG.termYears,
+      termYears: product.termYears,
       termMonths,
-      annualInterestRate: MORTGAGE_CONFIG.annualInterestRate,
+      annualInterestRate: product.annualInterestRate,
       monthlyInterestRate: monthlyRate,
       monthlyPayment,
       remainingBalance: principal,
       remainingTermMonths: termMonths,
+      interestOnly: Boolean(product.interestOnly),
+      productKey,
+      productLabel: product.label,
     };
   }
 
   function getNextMortgagePayment(mortgage) {
     if (!mortgage || mortgage.remainingTermMonths <= 0 || mortgage.remainingBalance <= 0) {
       return 0;
+    }
+
+    if (mortgage.interestOnly) {
+      if (mortgage.remainingTermMonths > 0) {
+        return roundCurrency(mortgage.remainingBalance * mortgage.monthlyInterestRate);
+      }
+      return roundCurrency(mortgage.remainingBalance);
     }
 
     const interestDue = mortgage.remainingBalance * mortgage.monthlyInterestRate;
@@ -590,6 +627,26 @@
         outstandingInterest: 0,
         totalOutstanding: 0,
         paymentsRemaining: 0,
+        isInterestOnly: Boolean(mortgage?.interestOnly),
+      };
+    }
+
+    if (mortgage.interestOnly) {
+      const outstandingPrincipal = roundCurrency(mortgage.remainingBalance);
+      const nextInterestDue = roundCurrency(outstandingPrincipal * mortgage.monthlyInterestRate);
+      const paymentsRemaining = Math.max(mortgage.remainingTermMonths, 0);
+      const monthlyPayment = paymentsRemaining > 0 ? nextInterestDue : outstandingPrincipal;
+      const outstandingInterest = roundCurrency(nextInterestDue * paymentsRemaining);
+
+      return {
+        monthlyPayment,
+        interestComponent: paymentsRemaining > 0 ? nextInterestDue : 0,
+        principalComponent: paymentsRemaining > 0 ? 0 : outstandingPrincipal,
+        outstandingPrincipal,
+        outstandingInterest,
+        totalOutstanding: roundCurrency(outstandingPrincipal + outstandingInterest),
+        paymentsRemaining,
+        isInterestOnly: true,
       };
     }
 
@@ -655,6 +712,7 @@
       outstandingInterest,
       totalOutstanding: roundCurrency(outstandingPrincipal + outstandingInterest),
       paymentsRemaining,
+      isInterestOnly: false,
     };
   }
 
@@ -748,7 +806,11 @@
         `Month${monthsElapsed > 1 ? "s" : ""} ${monthRange}: Collected ${formatCurrency(rentCollected)} in rent for ${monthLabel}.`
       );
 
-      const { totalPaid: mortgagePaid, mortgagesCleared } = processMortgagePayments(monthsElapsed);
+      const {
+        totalPaid: mortgagePaid,
+        mortgagesCleared,
+        forcedSales,
+      } = processMortgagePayments(monthsElapsed);
       if (mortgagePaid > 0) {
         state.balance -= mortgagePaid;
         addHistoryEntry(
@@ -766,6 +828,19 @@
             : `Mortgage fully repaid: ${clearedNames}.`
         );
       }
+
+      forcedSales.forEach(({ propertyName, salePrice, outstanding, netProceeds }) => {
+        state.balance += netProceeds;
+        const resultText =
+          netProceeds >= 0
+            ? `netted ${formatCurrency(netProceeds)}`
+            : `covered a shortfall of ${formatCurrency(Math.abs(netProceeds))}`;
+        addHistoryEntry(
+          `Forced sale of ${propertyName}: Sold for ${formatCurrency(
+            salePrice
+          )} to settle ${formatCurrency(outstanding)} remaining on the interest-only mortgage and ${resultText}.`
+        );
+      });
 
       state.balance = Math.round(state.balance * 100) / 100;
     }
@@ -808,16 +883,18 @@
 
   function processMortgagePayments(monthsElapsed) {
     if (monthsElapsed <= 0) {
-      return { totalPaid: 0, mortgagesCleared: [] };
+      return { totalPaid: 0, mortgagesCleared: [], forcedSales: [] };
     }
 
     let totalPaid = 0;
     const mortgagesCleared = [];
+    const forcedSales = [];
 
-    state.portfolio.forEach((property) => {
+    for (let index = state.portfolio.length - 1; index >= 0; index -= 1) {
+      const property = state.portfolio[index];
       const mortgage = property.mortgage;
-      if (!mortgage || mortgage.remainingTermMonths <= 0 || mortgage.remainingBalance <= 0) {
-        return;
+      if (!mortgage || mortgage.remainingBalance <= 0) {
+        continue;
       }
 
       for (let month = 0; month < monthsElapsed; month += 1) {
@@ -829,23 +906,57 @@
         const interestDue = roundCurrency(interestDueRaw);
         let payment = roundCurrency(mortgage.monthlyPayment);
         const totalDue = mortgage.remainingBalance + interestDue;
-        if (payment > totalDue) {
+        if (!mortgage.interestOnly && payment > totalDue) {
           payment = roundCurrency(totalDue);
         }
 
-        const principalPaid = roundCurrency(payment - interestDue);
-        mortgage.remainingBalance = Math.max(roundCurrency(mortgage.remainingBalance - principalPaid), 0);
-        mortgage.remainingTermMonths -= 1;
+        const principalPaid = mortgage.interestOnly
+          ? 0
+          : roundCurrency(Math.max(payment - interestDue, 0));
+        mortgage.remainingBalance = Math.max(
+          roundCurrency(mortgage.remainingBalance - principalPaid),
+          0
+        );
+        mortgage.remainingTermMonths = Math.max(mortgage.remainingTermMonths - 1, 0);
         totalPaid += payment;
       }
 
-      if (mortgage.remainingBalance <= 0.5 || mortgage.remainingTermMonths <= 0) {
+      if (mortgage.interestOnly && mortgage.remainingTermMonths <= 0 && mortgage.remainingBalance > 0.5) {
+        const outstanding = roundCurrency(mortgage.remainingBalance);
+        const availableBalance = roundCurrency(state.balance - totalPaid);
+        if (availableBalance >= outstanding) {
+          totalPaid += outstanding;
+          mortgage.remainingBalance = 0;
+          mortgagesCleared.push(property.name);
+          property.mortgage = null;
+        } else {
+          const salePrice = calculateSalePrice(property);
+          const netProceeds = roundCurrency(salePrice - outstanding);
+          forcedSales.push({
+            propertyName: property.name,
+            salePrice,
+            outstanding,
+            netProceeds,
+          });
+          state.portfolio.splice(index, 1);
+          continue;
+        }
+      }
+
+      if (
+        !mortgage.interestOnly &&
+        (mortgage.remainingBalance <= 0.5 || mortgage.remainingTermMonths <= 0)
+      ) {
         mortgagesCleared.push(property.name);
         property.mortgage = null;
       }
-    });
+    }
 
-    return { totalPaid: roundCurrency(totalPaid), mortgagesCleared };
+    return {
+      totalPaid: roundCurrency(totalPaid),
+      mortgagesCleared,
+      forcedSales,
+    };
   }
 
   function calculateSalePrice(property) {
@@ -887,19 +998,22 @@
     updateUI();
   }
 
-  function handleMortgagePurchase(propertyId) {
+  function handleMortgagePurchase(propertyId, productKey = "repayment") {
     const propertyIndex = state.market.findIndex((item) => item.id === propertyId);
     if (propertyIndex === -1) {
       return;
     }
 
     const property = state.market[propertyIndex];
-    const mortgage = createMortgageForCost(property.cost);
+    const product = getMortgageProduct(productKey);
+    const mortgage = createMortgageForCost(property.cost, productKey);
     const deposit = mortgage.deposit;
 
     if (state.balance < deposit) {
       addHistoryEntry(
-        `Attempted to mortgage ${property.name} but lacked the ${formatCurrency(deposit)} deposit.`
+        `Attempted to take a ${product.label.toLowerCase()} on ${property.name} but lacked the ${formatCurrency(
+          deposit
+        )} deposit.`
       );
       return;
     }
@@ -908,12 +1022,18 @@
     state.market.splice(propertyIndex, 1);
     const purchasedProperty = { ...property, mortgage };
     state.portfolio.push(purchasedProperty);
+    const interestRateLabel = (mortgage.annualInterestRate * 100).toFixed(2);
+    const financingSummary = mortgage.interestOnly
+      ? `interest-only payments of ${formatCurrency(mortgage.monthlyPayment)} with ${formatCurrency(
+          mortgage.principal
+        )} due at term end`
+      : `monthly payment ${formatCurrency(mortgage.monthlyPayment)}`;
     addHistoryEntry(
       `Mortgaged ${property.name}: Paid ${formatCurrency(deposit)} deposit and financed ${formatCurrency(
         property.cost - deposit
-      )} at ${(MORTGAGE_CONFIG.annualInterestRate * 100).toFixed(1)}% for ${
-        MORTGAGE_CONFIG.termYears
-      } years (monthly payment ${formatCurrency(mortgage.monthlyPayment)}).`
+      )} via a ${product.label.toLowerCase()} at ${interestRateLabel}% for ${
+        mortgage.termYears
+      } years (${financingSummary}).`
     );
     updateUI();
   }
@@ -1028,14 +1148,27 @@
         property.monthlyRent
       )}`;
 
-      const mortgagePreview = createMortgageForCost(property.cost);
-      const mortgageInfo = document.createElement("p");
+      const mortgagePreviews = AVAILABLE_MORTGAGE_PRODUCTS.map((product) => ({
+        product,
+        preview: createMortgageForCost(property.cost, product.key),
+      }));
+
+      const mortgageInfo = document.createElement("div");
       mortgageInfo.className = "small text-muted mb-3";
-      mortgageInfo.innerHTML = `Mortgage option: ${formatCurrency(
-        mortgagePreview.deposit
-      )} deposit, ${formatCurrency(mortgagePreview.monthlyPayment)} / month for ${
-        MORTGAGE_CONFIG.termYears
-      } years at ${(MORTGAGE_CONFIG.annualInterestRate * 100).toFixed(1)}%`;
+      mortgageInfo.innerHTML = mortgagePreviews
+        .map(({ product, preview }) => {
+          const rateLabel = (product.annualInterestRate * 100).toFixed(2);
+          const monthlyLabel = product.interestOnly
+            ? `${formatCurrency(preview.monthlyPayment)} interest`
+            : `${formatCurrency(preview.monthlyPayment)} / month`;
+          const suffix = product.interestOnly
+            ? " (principal due at end)"
+            : "";
+          return `<div><strong>${product.label}:</strong> ${formatCurrency(
+            preview.deposit
+          )} deposit, ${monthlyLabel} for ${product.termYears} years at ${rateLabel}%${suffix}</div>`;
+        })
+        .join("");
 
       const buttonGroup = document.createElement("div");
       buttonGroup.className = "d-grid gap-2 mt-auto";
@@ -1047,14 +1180,22 @@
       cashButton.disabled = state.balance < property.cost;
       cashButton.addEventListener("click", () => handleCashPurchase(property.id));
 
-      const mortgageButton = document.createElement("button");
-      mortgageButton.type = "button";
-      mortgageButton.className = "btn btn-primary";
-      mortgageButton.textContent = `Mortgage (Pay ${formatCurrency(mortgagePreview.deposit)})`;
-      mortgageButton.disabled = state.balance < mortgagePreview.deposit;
-      mortgageButton.addEventListener("click", () => handleMortgagePurchase(property.id));
+      const mortgageButtons = mortgagePreviews.map(({ product, preview }) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = product.interestOnly ? "btn btn-warning" : "btn btn-primary";
+        const buttonLabel = product.interestOnly
+          ? `Interest-only (Pay ${formatCurrency(preview.deposit)})`
+          : `Mortgage (Pay ${formatCurrency(preview.deposit)})`;
+        button.textContent = buttonLabel;
+        button.disabled = state.balance < preview.deposit;
+        button.addEventListener("click", () =>
+          handleMortgagePurchase(property.id, product.key)
+        );
+        return button;
+      });
 
-      buttonGroup.append(cashButton, mortgageButton);
+      buttonGroup.append(cashButton, ...mortgageButtons);
 
       const detailSection = document.createElement("div");
       detailSection.className = "mb-3 flex-grow-1";
@@ -1113,24 +1254,47 @@
         mortgageBreakdown = getMortgagePaymentBreakdown(mortgage);
         const breakdown = mortgageBreakdown;
         const summaryLine = document.createElement("div");
-        summaryLine.textContent = `Rent ${formatCurrency(property.monthlyRent)} · Mortgage ${formatCurrency(
-          breakdown.monthlyPayment
-        )} / month`;
+        if (breakdown.isInterestOnly) {
+          summaryLine.textContent = `Rent ${formatCurrency(
+            property.monthlyRent
+          )} · Interest-only ${formatCurrency(breakdown.monthlyPayment)} / month`;
+        } else {
+          summaryLine.textContent = `Rent ${formatCurrency(property.monthlyRent)} · Mortgage ${formatCurrency(
+            breakdown.monthlyPayment
+          )} / month`;
+        }
 
         const outstandingLine = document.createElement("div");
-        outstandingLine.textContent = `Outstanding: ${formatCurrency(
-          breakdown.outstandingPrincipal
-        )} loan + ${formatCurrency(breakdown.outstandingInterest)} interest (${formatCurrency(
-          breakdown.totalOutstanding
-        )} total)`;
+        if (breakdown.isInterestOnly) {
+          outstandingLine.textContent = `Principal due at end: ${formatCurrency(
+            breakdown.outstandingPrincipal
+          )} (remaining interest ${formatCurrency(breakdown.outstandingInterest)})`;
+        } else {
+          outstandingLine.textContent = `Outstanding: ${formatCurrency(
+            breakdown.outstandingPrincipal
+          )} loan + ${formatCurrency(breakdown.outstandingInterest)} interest (${formatCurrency(
+            breakdown.totalOutstanding
+          )} total)`;
+        }
 
         const paymentSplitLine = document.createElement("div");
-        paymentSplitLine.textContent = `This month's payment: ${formatCurrency(
-          breakdown.principalComponent
-        )} loan + ${formatCurrency(breakdown.interestComponent)} interest`;
+        if (breakdown.isInterestOnly) {
+          paymentSplitLine.textContent = `This month's payment: ${formatCurrency(
+            breakdown.interestComponent
+          )} interest-only`;
+        } else {
+          paymentSplitLine.textContent = `This month's payment: ${formatCurrency(
+            breakdown.principalComponent
+          )} loan + ${formatCurrency(breakdown.interestComponent)} interest`;
+        }
 
         const paymentsRemainingLine = document.createElement("div");
-        paymentsRemainingLine.textContent = `${breakdown.paymentsRemaining} payments remaining`;
+        if (breakdown.isInterestOnly) {
+          const plural = breakdown.paymentsRemaining === 1 ? "" : "s";
+          paymentsRemainingLine.textContent = `${breakdown.paymentsRemaining} interest payment${plural} before principal due`;
+        } else {
+          paymentsRemainingLine.textContent = `${breakdown.paymentsRemaining} payments remaining`;
+        }
 
         cashflowDetails.append(
           summaryLine,
