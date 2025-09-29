@@ -594,19 +594,58 @@
     }
 
     const outstandingPrincipal = roundCurrency(mortgage.remainingBalance);
-    const rawInterestDue = mortgage.remainingBalance * mortgage.monthlyInterestRate;
-    const outstandingInterest = Math.max(roundCurrency(rawInterestDue), 0);
+    const nextInterestDue = roundCurrency(outstandingPrincipal * mortgage.monthlyInterestRate);
     const scheduledPayment = roundCurrency(mortgage.monthlyPayment);
-    const totalDue = roundCurrency(outstandingPrincipal + outstandingInterest);
-    const monthlyPayment = Math.min(scheduledPayment, totalDue);
-    const interestComponent = Math.min(outstandingInterest, monthlyPayment);
+    const totalDueNext = roundCurrency(outstandingPrincipal + nextInterestDue);
+    const monthlyPayment = Math.min(scheduledPayment, totalDueNext);
+    const interestComponent = Math.min(nextInterestDue, monthlyPayment);
     const principalComponent = roundCurrency(Math.max(monthlyPayment - interestComponent, 0));
     const adjustedPrincipalComponent = Math.min(principalComponent, outstandingPrincipal);
 
-    let paymentsRemaining = mortgage.remainingTermMonths;
-    if (paymentsRemaining <= 0 && (outstandingPrincipal > 0 || outstandingInterest > 0)) {
-      paymentsRemaining = 1;
+    let simulatedBalance = outstandingPrincipal;
+    let simulatedTerm = mortgage.remainingTermMonths;
+    let projectedInterestCents = 0;
+    let projectedPayments = 0;
+    const maxIterations = Math.max(simulatedTerm + 120, 1);
+
+    while (simulatedBalance > 0 && projectedPayments < maxIterations) {
+      if (simulatedTerm <= 0 && simulatedBalance > 0) {
+        simulatedTerm = 1;
+      }
+
+      const interestDue = roundCurrency(simulatedBalance * mortgage.monthlyInterestRate);
+      projectedInterestCents += Math.round(interestDue * 100);
+
+      let payment = scheduledPayment;
+      const totalDue = roundCurrency(simulatedBalance + interestDue);
+      if (payment > totalDue) {
+        payment = totalDue;
+      }
+
+      const principalPaid = Math.min(
+        roundCurrency(Math.max(payment - interestDue, 0)),
+        simulatedBalance
+      );
+
+      simulatedBalance = roundCurrency(simulatedBalance - principalPaid);
+      simulatedTerm -= 1;
+      projectedPayments += 1;
+
+      if (simulatedBalance <= 0.005) {
+        simulatedBalance = 0;
+        break;
+      }
     }
+
+    if (simulatedBalance > 0) {
+      const interestDue = roundCurrency(simulatedBalance * mortgage.monthlyInterestRate);
+      projectedInterestCents += Math.round(interestDue * 100);
+      projectedPayments += 1;
+      simulatedBalance = 0;
+    }
+
+    const outstandingInterest = roundCurrency(projectedInterestCents / 100);
+    const paymentsRemaining = projectedPayments;
 
     return {
       monthlyPayment,
