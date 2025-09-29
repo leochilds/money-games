@@ -889,6 +889,7 @@
     let totalPaid = 0;
     const mortgagesCleared = [];
     const forcedSales = [];
+    let realizedNetProceeds = 0;
 
     for (let index = state.portfolio.length - 1; index >= 0; index -= 1) {
       const property = state.portfolio[index];
@@ -923,7 +924,9 @@
 
       if (mortgage.interestOnly && mortgage.remainingTermMonths <= 0 && mortgage.remainingBalance > 0.5) {
         const outstanding = roundCurrency(mortgage.remainingBalance);
-        const availableBalance = roundCurrency(state.balance - totalPaid);
+        const availableBalance = roundCurrency(
+          state.balance + realizedNetProceeds - totalPaid
+        );
         if (availableBalance >= outstanding) {
           totalPaid += outstanding;
           mortgage.remainingBalance = 0;
@@ -932,6 +935,7 @@
         } else {
           const salePrice = calculateSalePrice(property);
           const netProceeds = roundCurrency(salePrice - outstanding);
+          realizedNetProceeds = roundCurrency(realizedNetProceeds + netProceeds);
           forcedSales.push({
             propertyName: property.name,
             salePrice,
