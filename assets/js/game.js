@@ -104,6 +104,153 @@
     "Concierge Service": 95,
   };
 
+  const proceduralPropertyArchetypes = [
+    {
+      key: "urban_loft",
+      propertyType: "apartment",
+      names: [
+        "Canal View Loft",
+        "Warehouse Loft Residence",
+        "Transit Hub Micro Suite",
+        "Riverside Skyline Flat",
+      ],
+      descriptions: [
+        "Open-concept loft with exposed beams and industrial chic finishes.",
+        "Bright studio with soaring ceilings and premium smart-home upgrades.",
+        "Compact layout designed for efficient city living and quick commutes.",
+      ],
+      locationDescriptors: [
+        "Converted warehouse district steps from artisanal cafes.",
+        "Walkable neighbourhood beside major transit lines.",
+        "Revitalised riverfront promenade with co-working hubs.",
+      ],
+      bedroomsRange: [1, 2],
+      bathroomsRange: [1, 2],
+      demandRange: [6, 9],
+      proximityRange: [0.7, 0.96],
+      schoolRange: [4, 7],
+      crimeRange: [3, 5],
+      maintenanceLevels: ["low", "medium"],
+      featuresPool: [
+        "City View",
+        "Shared Rooftop",
+        "In-Unit Laundry",
+        "Smart Thermostat",
+        "Home Office",
+      ],
+    },
+    {
+      key: "family_suburb",
+      propertyType: "single_family",
+      names: [
+        "Meadowridge Colonial",
+        "Lakeside Craftsman Retreat",
+        "Willow Grove Residence",
+        "Sunset Ridge Family Estate",
+      ],
+      descriptions: [
+        "Spacious home with flexible floor plan tailored for growing families.",
+        "Expansive backyard and updated chef's kitchen with breakfast nook.",
+        "Light-filled interiors with formal dining and bonus recreation room.",
+      ],
+      locationDescriptors: [
+        "Quiet cul-de-sac with playgrounds and community pool.",
+        "Top-rated school catchment with weekly farmer's market.",
+        "Lake-adjacent suburb boasting hiking paths and tennis courts.",
+      ],
+      bedroomsRange: [3, 5],
+      bathroomsRange: [2, 4],
+      demandRange: [5, 8],
+      proximityRange: [0.5, 0.75],
+      schoolRange: [7, 10],
+      crimeRange: [1, 3],
+      maintenanceLevels: ["low", "medium"],
+      featuresPool: [
+        "Two-Car Garage",
+        "Backyard Deck",
+        "Home Office",
+        "Finished Basement",
+        "Smart Thermostat",
+      ],
+    },
+    {
+      key: "luxury_highrise",
+      propertyType: "luxury",
+      names: [
+        "Aurora Sky Penthouse",
+        "Summit View Grand Suite",
+        "Crown Heights Signature Residence",
+        "Helios Tower Panorama",
+      ],
+      descriptions: [
+        "Designer-curated interiors with private concierge and spa privileges.",
+        "Panoramic skyline vistas paired with bespoke finishes throughout.",
+        "Ultra-premium sky home with wine cellar and home automation package.",
+      ],
+      locationDescriptors: [
+        "Iconic tower above luxury retail promenade and fine dining.",
+        "Flagship high-rise neighbouring cultural and financial districts.",
+        "Prestigious address with private club access and valet services.",
+      ],
+      bedroomsRange: [2, 4],
+      bathroomsRange: [2, 4],
+      demandRange: [8, 10],
+      proximityRange: [0.9, 0.99],
+      schoolRange: [6, 9],
+      crimeRange: [1, 3],
+      maintenanceLevels: ["medium", "high"],
+      featuresPool: [
+        "Private Elevator",
+        "Wraparound Terrace",
+        "Floor-to-Ceiling Windows",
+        "Concierge Service",
+        "Smart Thermostat",
+      ],
+    },
+    {
+      key: "urban_townhome",
+      propertyType: "townhouse",
+      names: [
+        "Cobblestone Row Townhome",
+        "Maple Terrace Brownstone",
+        "Gallery District Duplex",
+        "Heritage Row Garden Home",
+      ],
+      descriptions: [
+        "Updated interiors blend classic masonry with modern conveniences.",
+        "Multi-level plan with flexible workspace and rooftop garden.",
+        "Sun-drenched living areas with custom millwork and smart lighting.",
+      ],
+      locationDescriptors: [
+        "Historic street close to bistros and boutique galleries.",
+        "Transit-friendly district lined with artisan markets.",
+        "Corner row with private courtyard and neighbourhood cafés.",
+      ],
+      bedroomsRange: [2, 4],
+      bathroomsRange: [2, 3],
+      demandRange: [6, 9],
+      proximityRange: [0.65, 0.85],
+      schoolRange: [6, 9],
+      crimeRange: [2, 4],
+      maintenanceLevels: ["medium"],
+      featuresPool: [
+        "Private Patio",
+        "Finished Basement",
+        "Smart Thermostat",
+        "In-Unit Laundry",
+        "Home Office",
+      ],
+    },
+  ];
+
+  const MARKET_CONFIG = {
+    maxSize: 8,
+    minSize: 4,
+    generationInterval: 3,
+    batchSize: 2,
+    maxAge: 12,
+  };
+
   function calculatePropertyValue(property) {
     const weights = {
       base: 220,
@@ -149,9 +296,180 @@
     tickLength: 1000,
     timerId: null,
     lastRentCollectionDay: 0,
+    lastMarketGenerationDay: 0,
   };
 
   const elements = {};
+
+  let generatedIdCounter = 1;
+
+  function getRandomInt(min, max) {
+    const lower = Math.ceil(min);
+    const upper = Math.floor(max);
+    return Math.floor(Math.random() * (upper - lower + 1)) + lower;
+  }
+
+  function getRandomNumber(min, max, precision = 2) {
+    const value = Math.random() * (max - min) + min;
+    const factor = 10 ** precision;
+    return Math.round(value * factor) / factor;
+  }
+
+  function pickRandom(items) {
+    return items[getRandomInt(0, items.length - 1)];
+  }
+
+  function selectFeatureSubset(featuresPool) {
+    if (!Array.isArray(featuresPool) || featuresPool.length === 0) {
+      return [];
+    }
+    const maxSelectable = Math.min(featuresPool.length, 4);
+    const minSelectable = Math.min(2, maxSelectable);
+    const subsetSize = getRandomInt(minSelectable, maxSelectable);
+    const poolCopy = [...featuresPool];
+    const selected = [];
+    while (selected.length < subsetSize && poolCopy.length > 0) {
+      const index = getRandomInt(0, poolCopy.length - 1);
+      selected.push(poolCopy.splice(index, 1)[0]);
+    }
+    return selected;
+  }
+
+  function generateUniquePropertyId() {
+    const usedIds = new Set([
+      ...state.market.map((property) => property.id),
+      ...state.portfolio.map((property) => property.id),
+    ]);
+
+    let nextId = `generated-${generatedIdCounter}`;
+    while (usedIds.has(nextId)) {
+      generatedIdCounter += 1;
+      nextId = `generated-${generatedIdCounter}`;
+    }
+
+    generatedIdCounter += 1;
+    return nextId;
+  }
+
+  function createProceduralProperty() {
+    const archetype = pickRandom(proceduralPropertyArchetypes);
+    const bedrooms = getRandomInt(archetype.bedroomsRange[0], archetype.bedroomsRange[1]);
+    const bathrooms = getRandomInt(archetype.bathroomsRange[0], archetype.bathroomsRange[1]);
+    const demandScore = getRandomInt(archetype.demandRange[0], archetype.demandRange[1]);
+    const location = {
+      proximity: getRandomNumber(archetype.proximityRange[0], archetype.proximityRange[1], 2),
+      schoolRating: getRandomInt(archetype.schoolRange[0], archetype.schoolRange[1]),
+      crimeScore: getRandomInt(archetype.crimeRange[0], archetype.crimeRange[1]),
+    };
+
+    const baseProperty = {
+      id: generateUniquePropertyId(),
+      name: pickRandom(archetype.names),
+      description: pickRandom(archetype.descriptions),
+      propertyType: archetype.propertyType,
+      bedrooms,
+      bathrooms,
+      features: selectFeatureSubset(archetype.featuresPool),
+      locationDescriptor: pickRandom(archetype.locationDescriptors),
+      demandScore,
+      location,
+      maintenanceLevel: pickRandom(archetype.maintenanceLevels),
+      marketAge: 0,
+      introducedOnDay: state.day,
+    };
+
+    const cost = calculatePropertyValue(baseProperty);
+    const annualYield = mapDemandToAnnualYield(baseProperty.demandScore);
+    const monthlyRent = Math.round((cost * annualYield) / 12);
+
+    return {
+      ...baseProperty,
+      cost,
+      annualYield,
+      monthlyRent,
+    };
+  }
+
+  function generateMarketListings(count = 1, { updateUI: shouldUpdateUI = true } = {}) {
+    if (state.market.length >= MARKET_CONFIG.maxSize) {
+      return [];
+    }
+
+    const listingsToGenerate = Math.min(
+      count,
+      Math.max(MARKET_CONFIG.maxSize - state.market.length, 0)
+    );
+
+    const newListings = [];
+    for (let index = 0; index < listingsToGenerate; index += 1) {
+      const property = createProceduralProperty();
+      state.market.push(property);
+      newListings.push(property);
+    }
+
+    if (newListings.length > 0 && shouldUpdateUI) {
+      updateUI();
+    }
+
+    return newListings;
+  }
+
+  function progressMarketListings() {
+    let marketChanged = false;
+    const retainedMarket = [];
+    const expiredListings = [];
+
+    state.market.forEach((property) => {
+      const currentAge = (property.marketAge ?? 0) + 1;
+      if (currentAge > MARKET_CONFIG.maxAge) {
+        expiredListings.push(property);
+        marketChanged = true;
+        return;
+      }
+      retainedMarket.push({ ...property, marketAge: currentAge });
+    });
+
+    if (expiredListings.length > 0) {
+      const removedNames = expiredListings.map((property) => property.name).join(", ");
+      addHistoryEntry(
+        expiredListings.length > 1
+          ? `Listings expired and left the market: ${removedNames}.`
+          : `Listing expired and left the market: ${removedNames}.`
+      );
+    }
+
+    state.market = retainedMarket;
+
+    const daysSinceGeneration = state.day - state.lastMarketGenerationDay;
+    const spaceAvailable = Math.max(MARKET_CONFIG.maxSize - state.market.length, 0);
+    let requiredListings = Math.max(MARKET_CONFIG.minSize - state.market.length, 0);
+
+    if (requiredListings === 0 && daysSinceGeneration >= MARKET_CONFIG.generationInterval) {
+      requiredListings = getRandomInt(1, MARKET_CONFIG.batchSize);
+    }
+
+    const listingsNeeded = Math.min(requiredListings, spaceAvailable);
+    let newListings = [];
+    if (listingsNeeded > 0 && spaceAvailable > 0) {
+      newListings = generateMarketListings(listingsNeeded, { updateUI: false });
+      if (newListings.length > 0) {
+        const newNames = newListings.map((property) => property.name).join(", ");
+        addHistoryEntry(
+          newListings.length > 1
+            ? `New listings have entered the market: ${newNames}.`
+            : `New listing has entered the market: ${newNames}.`
+        );
+        state.lastMarketGenerationDay = state.day;
+        marketChanged = true;
+      }
+    }
+
+    if (marketChanged) {
+      updateUI();
+    }
+
+    return marketChanged;
+  }
 
   function cacheElements() {
     elements.balance = document.getElementById("playerBalance");
@@ -207,6 +525,8 @@
         cost,
         annualYield,
         monthlyRent,
+        marketAge: 0,
+        introducedOnDay: state.day,
       };
     });
   }
@@ -218,6 +538,7 @@
     state.portfolio = [];
     state.history = [];
     state.lastRentCollectionDay = 0;
+    state.lastMarketGenerationDay = state.day;
     if (logInitialMessage) {
       addHistoryEntry("New game started with $1,000 in capital.");
     } else {
@@ -270,7 +591,11 @@
       );
     }
 
-    updateUI();
+    const marketUpdated = progressMarketListings();
+
+    if (!marketUpdated) {
+      updateUI();
+    }
   }
 
   function calculateRentPerMonth() {
