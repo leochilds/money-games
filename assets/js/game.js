@@ -143,7 +143,8 @@
   const state = {
     balance: 0,
     day: 1,
-    properties: [],
+    market: [],
+    portfolio: [],
     history: [],
     tickLength: 1000,
     timerId: null,
@@ -206,7 +207,6 @@
         cost,
         annualYield,
         monthlyRent,
-        owned: false,
       };
     });
   }
@@ -214,7 +214,8 @@
   function initialiseGameState(logInitialMessage = true) {
     state.balance = 1000;
     state.day = 1;
-    state.properties = cloneDefaultProperties();
+    state.market = cloneDefaultProperties();
+    state.portfolio = [];
     state.history = [];
     state.lastRentCollectionDay = 0;
     if (logInitialMessage) {
@@ -273,16 +274,19 @@
   }
 
   function calculateRentPerMonth() {
-    return state.properties
-      .filter((property) => property.owned)
-      .reduce((total, property) => total + property.monthlyRent, 0);
+    return state.portfolio.reduce(
+      (total, property) => total + property.monthlyRent,
+      0
+    );
   }
 
   function handlePurchase(propertyId) {
-    const property = state.properties.find((item) => item.id === propertyId);
-    if (!property || property.owned) {
+    const propertyIndex = state.market.findIndex((item) => item.id === propertyId);
+    if (propertyIndex === -1) {
       return;
     }
+
+    const property = state.market[propertyIndex];
 
     if (state.balance < property.cost) {
       addHistoryEntry(
@@ -294,7 +298,8 @@
     }
 
     state.balance -= property.cost;
-    property.owned = true;
+    state.market.splice(propertyIndex, 1);
+    state.portfolio.push(property);
     addHistoryEntry(
       `Purchased ${property.name} for ${formatCurrency(property.cost)}.`
     );
@@ -303,15 +308,12 @@
 
   function renderProperties() {
     elements.propertyList.innerHTML = "";
-    state.properties.forEach((property) => {
+    state.market.forEach((property) => {
       const col = document.createElement("div");
       col.className = "col-sm-6";
 
       const card = document.createElement("div");
       card.className = "card property-card h-100";
-      if (property.owned) {
-        card.classList.add("owned");
-      }
 
       const cardBody = document.createElement("div");
       cardBody.className = "card-body d-flex flex-column";
@@ -376,8 +378,8 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "btn btn-primary w-100 mt-auto";
-      button.textContent = property.owned ? "Owned" : "Buy property";
-      button.disabled = property.owned || state.balance < property.cost;
+      button.textContent = "Buy property";
+      button.disabled = state.balance < property.cost;
       button.addEventListener("click", () => handlePurchase(property.id));
 
       const detailSection = document.createElement("div");
@@ -399,7 +401,7 @@
 
   function renderIncomeStatus() {
     elements.incomeStatus.innerHTML = "";
-    const ownedProperties = state.properties.filter((property) => property.owned);
+    const ownedProperties = state.portfolio;
 
     if (ownedProperties.length === 0) {
       const emptyItem = document.createElement("li");
