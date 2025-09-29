@@ -1051,31 +1051,29 @@
     const property = state.portfolio[propertyIndex];
     const salePrice = calculateSalePrice(property);
     let mortgagePayoff = 0;
-    let mortgageInterestDue = 0;
+    let outstandingInterest = 0;
     if (property.mortgage && property.mortgage.remainingBalance > 0) {
       const breakdown = getMortgagePaymentBreakdown(property.mortgage);
       mortgagePayoff = breakdown.outstandingPrincipal;
-      mortgageInterestDue = breakdown.outstandingInterest;
+      outstandingInterest = breakdown.outstandingInterest;
     }
 
-    const totalMortgageSettlement = roundCurrency(mortgagePayoff + mortgageInterestDue);
+    const totalMortgageSettlement = roundCurrency(mortgagePayoff);
     const netProceeds = roundCurrency(salePrice - totalMortgageSettlement);
     state.balance += netProceeds;
     state.portfolio.splice(propertyIndex, 1);
     if (totalMortgageSettlement > 0) {
-      const components = [];
-      if (mortgagePayoff > 0) {
-        components.push(`${formatCurrency(mortgagePayoff)} loan balance`);
+      let historyMessage = `Sold ${property.name} for ${formatCurrency(
+        salePrice
+      )}, repaid ${formatCurrency(mortgagePayoff)} remaining on the mortgage principal (net ${formatCurrency(
+        netProceeds
+      )}).`;
+      if (outstandingInterest > 0) {
+        historyMessage += ` Avoided ${formatCurrency(
+          outstandingInterest
+        )} in future interest charges.`;
       }
-      if (mortgageInterestDue > 0) {
-        components.push(`${formatCurrency(mortgageInterestDue)} interest`);
-      }
-      const settlementSummary = components.join(" and ");
-      addHistoryEntry(
-        `Sold ${property.name} for ${formatCurrency(salePrice)}, repaid ${settlementSummary} remaining on the mortgage (net ${formatCurrency(
-          netProceeds
-        )}).`
-      );
+      addHistoryEntry(historyMessage);
     } else {
       addHistoryEntry(`Sold ${property.name} for ${formatCurrency(salePrice)}.`);
     }
@@ -1325,7 +1323,7 @@
       const salePrice = calculateSalePrice(property);
       let netSaleLabel = `Sell for ${formatCurrency(salePrice)}`;
       if (mortgageBreakdown) {
-        const settlement = mortgageBreakdown.totalOutstanding;
+        const settlement = mortgageBreakdown.outstandingPrincipal ?? mortgageBreakdown.totalOutstanding;
         if (settlement > 0) {
           const netProceeds = roundCurrency(salePrice - settlement);
           netSaleLabel = `Sell for ${formatCurrency(salePrice)} (net ${formatCurrency(netProceeds)})`;
