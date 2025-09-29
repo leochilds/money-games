@@ -611,6 +611,18 @@
     );
   }
 
+  function calculateSalePrice(property) {
+    if (!property) {
+      return 0;
+    }
+
+    const baseCost = Number.isFinite(property.cost)
+      ? property.cost
+      : calculatePropertyValue(property);
+
+    return Math.max(Math.round(baseCost), 0);
+  }
+
   function handlePurchase(propertyId) {
     const propertyIndex = state.market.findIndex((item) => item.id === propertyId);
     if (propertyIndex === -1) {
@@ -633,6 +645,22 @@
     state.portfolio.push(property);
     addHistoryEntry(
       `Purchased ${property.name} for ${formatCurrency(property.cost)}.`
+    );
+    updateUI();
+  }
+
+  function handleSale(propertyId) {
+    const propertyIndex = state.portfolio.findIndex((item) => item.id === propertyId);
+    if (propertyIndex === -1) {
+      return;
+    }
+
+    const property = state.portfolio[propertyIndex];
+    const salePrice = calculateSalePrice(property);
+    state.balance += salePrice;
+    state.portfolio.splice(propertyIndex, 1);
+    addHistoryEntry(
+      `Sold ${property.name} for ${formatCurrency(salePrice)}.`
     );
     updateUI();
   }
@@ -744,14 +772,42 @@
 
     ownedProperties.forEach((property) => {
       const item = document.createElement("li");
-      item.className = "list-group-item d-flex justify-content-between align-items-center";
-      item.innerHTML = `
-        <span>
-          <strong>${property.name}</strong>
-          <small class="d-block text-muted">${property.description}</small>
-        </span>
-        <span class="badge bg-success rounded-pill">Rent / month: ${formatCurrency(property.monthlyRent)}</span>
-      `;
+      item.className =
+        "list-group-item d-flex flex-column flex-sm-row align-items-sm-center gap-3";
+
+      const info = document.createElement("div");
+      info.className = "flex-grow-1";
+
+      const nameElement = document.createElement("div");
+      nameElement.className = "fw-semibold";
+      nameElement.textContent = property.name;
+      info.append(nameElement);
+
+      if (property.description) {
+        const descriptionElement = document.createElement("small");
+        descriptionElement.className = "d-block text-muted";
+        descriptionElement.textContent = property.description;
+        info.append(descriptionElement);
+      }
+
+      const actionWrapper = document.createElement("div");
+      actionWrapper.className =
+        "d-flex flex-column flex-sm-row align-items-sm-center gap-2 ms-sm-auto text-sm-end";
+
+      const rentBadge = document.createElement("span");
+      rentBadge.className = "badge bg-success rounded-pill";
+      rentBadge.textContent = `Rent / month: ${formatCurrency(property.monthlyRent)}`;
+
+      const salePrice = calculateSalePrice(property);
+      const sellButton = document.createElement("button");
+      sellButton.type = "button";
+      sellButton.className = "btn btn-outline-danger btn-sm";
+      sellButton.textContent = `Sell for ${formatCurrency(salePrice)}`;
+      sellButton.addEventListener("click", () => handleSale(property.id));
+
+      actionWrapper.append(rentBadge, sellButton);
+
+      item.append(info, actionWrapper);
       elements.incomeStatus.append(item);
     });
   }
