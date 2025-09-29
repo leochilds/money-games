@@ -660,6 +660,10 @@
       termYears: resolvedTermYears,
       baseRate,
     });
+    const fixedPeriodMonths = Math.max(
+      Math.round((resolvedProfile.fixedPeriodYears ?? resolvedTermYears) * 12),
+      0
+    );
     const fixedRateOverride = Number.isFinite(annualInterestRate)
       ? roundRate(
           Math.max(
@@ -696,11 +700,85 @@
       depositRatio,
       baseRate: resolvedProfile.baseRate,
       fixedPeriodYears: resolvedProfile.fixedPeriodYears,
+      fixedPeriodMonths,
       fixedRate: rate,
       variableRateMargin: resolvedProfile.variableRateMargin,
       reversionRate: resolvedProfile.reversionRate,
+      variableRateActive: false,
       productKey: null,
       productLabel: "Custom mortgage",
+    };
+  }
+
+  function resolveFixedPeriodMonths(mortgage) {
+    if (!mortgage) {
+      return 0;
+    }
+    if (Number.isFinite(mortgage.fixedPeriodMonths)) {
+      return Math.max(Math.round(mortgage.fixedPeriodMonths), 0);
+    }
+    const fallbackYears = mortgage.fixedPeriodYears ?? mortgage.termYears ?? 0;
+    const computed = Math.max(Math.round(fallbackYears * 12), 0);
+    mortgage.fixedPeriodMonths = computed;
+    return computed;
+  }
+
+  function calculateMortgageReversionRate(mortgage) {
+    if (!mortgage) {
+      return 0;
+    }
+    const explicit = Number.isFinite(mortgage.reversionRate)
+      ? mortgage.reversionRate
+      : null;
+    const baseRateValue = Number.isFinite(mortgage.baseRate) ? mortgage.baseRate : 0;
+    const margin = Number.isFinite(mortgage.variableRateMargin)
+      ? mortgage.variableRateMargin
+      : 0;
+    const resolved = explicit ?? roundRate(baseRateValue + margin);
+    if (!Number.isFinite(resolved) || resolved < 0) {
+      return 0;
+    }
+    return resolved;
+  }
+
+  function activateMortgageVariablePhase(mortgage) {
+    if (!mortgage || mortgage.variableRateActive || mortgage.remainingBalance <= 0.5) {
+      return { activated: false };
+    }
+
+    const reversionRate = calculateMortgageReversionRate(mortgage);
+    const margin = Number.isFinite(mortgage.variableRateMargin)
+      ? mortgage.variableRateMargin
+      : 0;
+    const baseRateValue = Number.isFinite(mortgage.baseRate) ? mortgage.baseRate : reversionRate - margin;
+
+    mortgage.variableRateActive = true;
+    mortgage.annualInterestRate = reversionRate;
+    mortgage.monthlyInterestRate = reversionRate / 12;
+    mortgage.reversionRate = reversionRate;
+
+    if (mortgage.interestOnly) {
+      mortgage.monthlyPayment = roundCurrency(
+        mortgage.remainingBalance * mortgage.monthlyInterestRate
+      );
+    } else {
+      const remainingYears = Math.max(mortgage.remainingTermMonths, 0) / 12;
+      if (remainingYears > 0 && mortgage.remainingBalance > 0.5) {
+        mortgage.monthlyPayment = calculateMortgageMonthlyPayment(
+          mortgage.remainingBalance,
+          reversionRate,
+          remainingYears
+        );
+      } else {
+        mortgage.monthlyPayment = roundCurrency(mortgage.remainingBalance);
+      }
+    }
+
+    return {
+      activated: true,
+      baseRate: baseRateValue,
+      margin,
+      reversionRate,
     };
   }
 
@@ -769,10 +847,7 @@
       ? mortgage.termMonths
       : Math.round((mortgage.termYears ?? 0) * 12);
     const totalTermMonths = Math.max(Math.round(totalTermMonthsRaw ?? 0), remainingTermMonths);
-    const fixedPeriodMonths = Math.max(
-      Math.round((mortgage.fixedPeriodYears ?? mortgage.termYears ?? 0) * 12),
-      0
-    );
+    const fixedPeriodMonths = resolveFixedPeriodMonths(mortgage);
     const monthsElapsed = Math.max(totalTermMonths - remainingTermMonths, 0);
     const fixedMonthsRemaining = Math.max(fixedPeriodMonths - monthsElapsed, 0);
     const paymentsRemainingInFixed = Math.max(
@@ -783,6 +858,8 @@
     if (mortgage.interestOnly) {
       const fixedInterestRemaining = roundCurrency(nextInterestDue * paymentsRemainingInFixed);
       const paymentsRemaining = remainingTermMonths;
+      const isVariableActive = Boolean(mortgage.variableRateActive) || paymentsRemainingInFixed <= 0;
+      const variableStartsInMonths = isVariableActive ? 0 : Math.max(fixedMonthsRemaining, 0);
       const fixedTotals = {
         monthsRemaining: fixedMonthsRemaining,
         paymentsRemaining: paymentsRemainingInFixed,
@@ -792,7 +869,6 @@
         projectedBalanceAfter: outstandingPrincipal,
       };
 
-      const variableStartsInMonths = Math.max(fixedMonthsRemaining, 0);
       const monthsAfterFixed = Math.max(remainingTermMonths - paymentsRemainingInFixed, 0);
       const variableAnnualRate =
         mortgage.reversionRate ?? (mortgage.baseRate ?? 0) + (mortgage.variableRateMargin ?? 0);
@@ -809,7 +885,7 @@
         fixedPeriod: fixedTotals,
         variablePhase: {
           startsInMonths: variableStartsInMonths,
-          isActive: paymentsRemainingInFixed <= 0 && mortgage.remainingBalance > 0,
+          isActive: isVariableActive && mortgage.remainingBalance > 0,
           baseRate: mortgage.baseRate,
           margin: mortgage.variableRateMargin,
           reversionRate: variableAnnualRate,
@@ -860,6 +936,7 @@
       projectedBalanceAfter: simulatedBalance,
     };
 
+    const isVariableActive = Boolean(mortgage.variableRateActive) || paymentsRemainingInFixed <= 0;
     const monthsAfterFixed = Math.max(remainingTermMonths - paymentsRemainingInFixed, 0);
     let estimatedVariablePayment = 0;
     if (monthsAfterFixed > 0 && simulatedBalance > 0) {
@@ -880,8 +957,8 @@
       principalRemaining: outstandingPrincipal,
       fixedPeriod: fixedTotals,
       variablePhase: {
-        startsInMonths: Math.max(fixedMonthsRemaining, 0),
-        isActive: paymentsRemainingInFixed <= 0 && mortgage.remainingBalance > 0,
+        startsInMonths: isVariableActive ? 0 : Math.max(fixedMonthsRemaining, 0),
+        isActive: isVariableActive && mortgage.remainingBalance > 0,
         baseRate: mortgage.baseRate,
         margin: mortgage.variableRateMargin,
         reversionRate:
@@ -1115,6 +1192,7 @@
     let totalPaid = 0;
     const mortgagesCleared = [];
     const forcedSales = [];
+    const variableTransitions = [];
     let realizedNetProceeds = 0;
 
     for (let index = state.portfolio.length - 1; index >= 0; index -= 1) {
@@ -1122,6 +1200,26 @@
       const mortgage = property.mortgage;
       if (!mortgage || mortgage.remainingBalance <= 0) {
         continue;
+      }
+
+      const totalTermMonths = Number.isFinite(mortgage.termMonths)
+        ? Math.max(Math.round(mortgage.termMonths), 0)
+        : Math.max(Math.round((mortgage.termYears ?? 0) * 12), 0);
+      const fixedPeriodMonths = resolveFixedPeriodMonths(mortgage);
+
+      if (
+        fixedPeriodMonths <= 0 &&
+        !mortgage.variableRateActive &&
+        mortgage.remainingBalance > 0.5 &&
+        mortgage.remainingTermMonths > 0
+      ) {
+        const activation = activateMortgageVariablePhase(mortgage);
+        if (activation.activated) {
+          variableTransitions.push({
+            propertyName: property.name,
+            ...activation,
+          });
+        }
       }
 
       for (let month = 0; month < monthsElapsed; month += 1) {
@@ -1146,6 +1244,23 @@
         );
         mortgage.remainingTermMonths = Math.max(mortgage.remainingTermMonths - 1, 0);
         totalPaid += payment;
+
+        if (
+          !mortgage.variableRateActive &&
+          mortgage.remainingBalance > 0.5 &&
+          mortgage.remainingTermMonths > 0
+        ) {
+          const monthsCompleted = Math.max(totalTermMonths - mortgage.remainingTermMonths, 0);
+          if (monthsCompleted >= fixedPeriodMonths && fixedPeriodMonths > 0) {
+            const activation = activateMortgageVariablePhase(mortgage);
+            if (activation.activated) {
+              variableTransitions.push({
+                propertyName: property.name,
+                ...activation,
+              });
+            }
+          }
+        }
       }
 
       if (mortgage.interestOnly && mortgage.remainingTermMonths <= 0 && mortgage.remainingBalance > 0.5) {
@@ -1181,6 +1296,25 @@
         property.mortgage = null;
       }
     }
+
+    variableTransitions.forEach(({ propertyName, baseRate, margin, reversionRate }) => {
+      const rateLabel = Number.isFinite(reversionRate)
+        ? `${(reversionRate * 100).toFixed(2)}%`
+        : "variable rate";
+      const marginLabel = Number.isFinite(margin)
+        ? `${(margin * 100).toFixed(2)}%`
+        : null;
+      const baseLabel = Number.isFinite(baseRate) ? `${(baseRate * 100).toFixed(2)}%` : null;
+      let message = `${propertyName} mortgage reverted to variable rate at ${rateLabel}`;
+      if (baseLabel && marginLabel) {
+        message += ` (${baseLabel} base + ${marginLabel} margin).`;
+      } else if (marginLabel) {
+        message += ` (${marginLabel} margin applied).`;
+      } else {
+        message += ".";
+      }
+      addHistoryEntry(message);
+    });
 
     return {
       totalPaid: roundCurrency(totalPaid),
@@ -1646,8 +1780,18 @@
       info.className = "flex-grow-1";
 
       const nameElement = document.createElement("div");
-      nameElement.className = "fw-semibold";
-      nameElement.textContent = property.name;
+      nameElement.className = "fw-semibold d-flex flex-wrap align-items-center gap-2";
+      const nameText = document.createElement("span");
+      nameText.textContent = property.name;
+      nameElement.append(nameText);
+      const mortgage = property.mortgage;
+      if (mortgage?.variableRateActive) {
+        item.classList.add("variable-rate-mortgage");
+        const variableBadge = document.createElement("span");
+        variableBadge.className = "badge badge-variable-rate text-uppercase";
+        variableBadge.textContent = "Variable rate";
+        nameElement.append(variableBadge);
+      }
       info.append(nameElement);
 
       if (property.description) {
@@ -1657,7 +1801,6 @@
         info.append(descriptionElement);
       }
 
-      const mortgage = property.mortgage;
       const cashflowDetails = document.createElement("div");
       cashflowDetails.className = "small text-muted";
       let mortgageBreakdown = null;

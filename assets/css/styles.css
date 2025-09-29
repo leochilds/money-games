@@ -9,6 +9,25 @@ body {
   font-size: 0.95rem;
 }
 
+.badge-variable-rate {
+  background-color: #ffe08a;
+  color: #5c4400;
+  border: 1px solid rgba(92, 68, 0, 0.35);
+  box-shadow: 0 0.25rem 0.5rem rgba(92, 68, 0, 0.15);
+  letter-spacing: 0.08em;
+  font-size: 0.65rem;
+}
+
+.list-group-item.variable-rate-mortgage {
+  border-left: 4px solid #f7b731;
+  background-image: linear-gradient(
+    90deg,
+    rgba(247, 183, 49, 0.18),
+    rgba(247, 183, 49, 0.05) 55%,
+    transparent
+  );
+}
+
 .property-card.owned {
   border: 2px solid #198754;
   box-shadow: 0 0 0.5rem rgba(25, 135, 84, 0.35);
