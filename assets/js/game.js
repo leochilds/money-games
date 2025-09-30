@@ -91,8 +91,10 @@
   const FINANCE_CONFIG = {
     depositOptions: [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5],
     termOptions: [2, 5, 10, 25],
+    fixedPeriodOptions: [2, 5, 10],
     defaultDepositRatio: 0.2,
     defaultTermYears: 25,
+    defaultFixedPeriodYears: 5,
     minimumRate: 0.025,
     maximumRate: 0.085,
     centralBank: {
@@ -333,6 +335,7 @@
     propertyId: null,
     depositRatio: FINANCE_CONFIG.defaultDepositRatio,
     termYears: FINANCE_CONFIG.defaultTermYears,
+    fixedPeriodYears: FINANCE_CONFIG.defaultFixedPeriodYears,
     annualInterestRate: FINANCE_CONFIG.centralBank.initialRate,
     rateProfile: null,
     interestOnly: false,
@@ -530,6 +533,9 @@
     elements.financePropertyName = document.getElementById("financePropertyName");
     elements.financePropertySummary = document.getElementById("financePropertySummary");
     elements.financeDepositOptions = document.getElementById("financeDepositOptions");
+    elements.financeFixedPeriodOptions = document.getElementById(
+      "financeFixedPeriodOptions"
+    );
     elements.financeTermOptions = document.getElementById("financeTermOptions");
     elements.financePaymentTypeOptions = document.getElementById(
       "financePaymentTypeOptions"
@@ -580,16 +586,37 @@
     return `${(value * 100).toFixed(2)}%`;
   }
 
-  function deriveMortgageRateProfile({ depositRatio, termYears, baseRate } = {}) {
+  function deriveMortgageRateProfile({
+    depositRatio,
+    termYears,
+    fixedPeriodYears,
+    baseRate,
+  } = {}) {
     const { centralBank, rateModel, maximumRate, minimumRate } = FINANCE_CONFIG;
     const minDeposit = FINANCE_CONFIG.depositOptions[0];
     const maxDeposit = FINANCE_CONFIG.depositOptions[FINANCE_CONFIG.depositOptions.length - 1];
     const resolvedDepositRatio = Number.isFinite(depositRatio)
       ? Math.min(Math.max(depositRatio, minDeposit), maxDeposit)
       : FINANCE_CONFIG.defaultDepositRatio;
-    const resolvedFixedYears = Number.isFinite(termYears)
+    const resolvedTermYears = Number.isFinite(termYears)
       ? Math.max(Math.round(termYears), 1)
       : FINANCE_CONFIG.defaultTermYears;
+    const desiredFixedYears = Number.isFinite(fixedPeriodYears)
+      ? Math.max(Math.round(fixedPeriodYears), 1)
+      : FINANCE_CONFIG.defaultFixedPeriodYears ?? resolvedTermYears;
+    const resolvedFixedYearsCandidate = resolveFixedPeriodSelection(
+      resolvedTermYears,
+      desiredFixedYears
+    );
+    const resolvedFixedYears = Math.max(
+      1,
+      Math.min(
+        Number.isFinite(resolvedFixedYearsCandidate)
+          ? resolvedFixedYearsCandidate
+          : resolvedTermYears,
+        resolvedTermYears
+      )
+    );
     const resolvedBaseRate = Number.isFinite(baseRate)
       ? baseRate
       : state.centralBankRate ?? centralBank.initialRate;
@@ -657,6 +684,7 @@
     {
       depositRatio = FINANCE_CONFIG.defaultDepositRatio,
       termYears = FINANCE_CONFIG.defaultTermYears,
+      fixedPeriodYears = FINANCE_CONFIG.defaultFixedPeriodYears,
       annualInterestRate,
       rateProfile,
       baseRate,
@@ -670,10 +698,15 @@
     const resolvedProfile = rateProfile ?? deriveMortgageRateProfile({
       depositRatio,
       termYears: resolvedTermYears,
+      fixedPeriodYears,
       baseRate,
     });
+    const resolvedFixedPeriodYears = Math.min(
+      resolvedProfile.fixedPeriodYears ?? resolvedTermYears,
+      resolvedTermYears
+    );
     const fixedPeriodMonths = Math.max(
-      Math.round((resolvedProfile.fixedPeriodYears ?? resolvedTermYears) * 12),
+      Math.round(resolvedFixedPeriodYears * 12),
       0
     );
     const fixedRateOverride = Number.isFinite(annualInterestRate)
@@ -711,7 +744,7 @@
       interestOnly: Boolean(interestOnly),
       depositRatio,
       baseRate: resolvedProfile.baseRate,
-      fixedPeriodYears: resolvedProfile.fixedPeriodYears,
+      fixedPeriodYears: resolvedFixedPeriodYears,
       fixedPeriodMonths,
       fixedRate: rate,
       variableRateMargin: resolvedProfile.variableRateMargin,
@@ -1379,6 +1412,7 @@
     {
       depositRatio = FINANCE_CONFIG.defaultDepositRatio,
       termYears = FINANCE_CONFIG.defaultTermYears,
+      fixedPeriodYears = FINANCE_CONFIG.defaultFixedPeriodYears,
       rateProfile,
       interestOnly = false,
     } = {}
@@ -1392,10 +1426,12 @@
     const resolvedProfile = rateProfile ?? deriveMortgageRateProfile({
       depositRatio,
       termYears,
+      fixedPeriodYears,
     });
     const mortgage = createMortgageForCost(property.cost, {
       depositRatio,
       termYears,
+      fixedPeriodYears,
       rateProfile: resolvedProfile,
       interestOnly,
     });
@@ -1552,14 +1588,20 @@
       const previewProfile = deriveMortgageRateProfile({
         depositRatio: defaultDepositRatio,
         termYears: defaultTermYears,
+        fixedPeriodYears: FINANCE_CONFIG.defaultFixedPeriodYears,
       });
       const mortgagePreview = createMortgageForCost(property.cost, {
         depositRatio: defaultDepositRatio,
         termYears: defaultTermYears,
+        fixedPeriodYears: FINANCE_CONFIG.defaultFixedPeriodYears,
         rateProfile: previewProfile,
       });
-      const fixedPeriodLabel = `${previewProfile.fixedPeriodYears} year${
-        previewProfile.fixedPeriodYears === 1 ? "" : "s"
+      const previewFixedYears = Math.min(
+        previewProfile.fixedPeriodYears,
+        defaultTermYears
+      );
+      const fixedPeriodLabel = `${previewFixedYears} year${
+        previewFixedYears === 1 ? "" : "s"
       }`;
       mortgageInfo.innerHTML = `
         <div>
@@ -1640,6 +1682,67 @@
       .join("");
   }
 
+  function resolveFixedPeriodSelection(termYears, desiredYears) {
+    const options = FINANCE_CONFIG.fixedPeriodOptions ?? [];
+    const fallback = FINANCE_CONFIG.defaultFixedPeriodYears ?? termYears;
+    const roundedDesired = Number.isFinite(desiredYears)
+      ? Math.max(Math.round(desiredYears), 1)
+      : null;
+
+    if (options.length === 0) {
+      return Math.min(roundedDesired ?? fallback, termYears);
+    }
+
+    if (roundedDesired) {
+      const matchedOption = options.find(
+        (option) => Math.abs(option - roundedDesired) < 1e-6 && option <= termYears
+      );
+      if (matchedOption) {
+        return matchedOption;
+      }
+    }
+
+    const eligibleOptions = options.filter((option) => option <= termYears);
+    if (eligibleOptions.length > 0) {
+      return eligibleOptions[eligibleOptions.length - 1];
+    }
+
+    const smallestOption = options[0];
+    return Math.min(smallestOption, termYears);
+  }
+
+  function renderFinanceFixedPeriodOptions() {
+    if (!elements.financeFixedPeriodOptions) {
+      return;
+    }
+
+    const effectiveSelection = resolveFixedPeriodSelection(
+      financeState.termYears,
+      financeState.fixedPeriodYears
+    );
+    if (Math.abs(effectiveSelection - financeState.fixedPeriodYears) > 1e-6) {
+      financeState.fixedPeriodYears = effectiveSelection;
+    }
+
+    elements.financeFixedPeriodOptions.innerHTML = (FINANCE_CONFIG.fixedPeriodOptions ?? [])
+      .map((years) => {
+        const disabled = years > financeState.termYears;
+        const isActive = !disabled && Math.abs(years - financeState.fixedPeriodYears) < 1e-6;
+        return `
+          <button
+            type="button"
+            class="btn btn-outline-secondary${isActive ? " active" : ""}"
+            data-fixed-period-years="${years}"
+            aria-pressed="${isActive}"
+            ${disabled ? "disabled" : ""}
+          >
+            ${years} years
+          </button>
+        `;
+      })
+      .join("");
+  }
+
   function renderFinanceTermOptions() {
     if (!elements.financeTermOptions) {
       return;
@@ -1696,12 +1799,14 @@
     const rateProfile = deriveMortgageRateProfile({
       depositRatio: financeState.depositRatio,
       termYears: financeState.termYears,
+      fixedPeriodYears: financeState.fixedPeriodYears,
     });
     financeState.annualInterestRate = rateProfile.fixedRate;
     financeState.rateProfile = rateProfile;
     const mortgage = createMortgageForCost(property.cost, {
       depositRatio: financeState.depositRatio,
       termYears: financeState.termYears,
+      fixedPeriodYears: financeState.fixedPeriodYears,
       rateProfile,
       interestOnly: financeState.interestOnly,
     });
@@ -1714,10 +1819,11 @@
       : `<p class="mb-1"><strong>Payments:</strong> ${formatCurrency(
           mortgage.monthlyPayment
         )} / month over ${mortgage.termYears} years</p>`;
+    const displayFixedYears = mortgage.fixedPeriodYears;
     const rateLine = `<p class="${financeState.interestOnly ? "mb-1" : "mb-0"}"><strong>Rate:</strong> Fixed ${(rateProfile.fixedRate * 100).toFixed(
       2
-    )}% for ${rateProfile.fixedPeriodYears} year${
-      rateProfile.fixedPeriodYears === 1 ? "" : "s"
+    )}% for ${displayFixedYears} year${
+      displayFixedYears === 1 ? "" : "s"
     }, then base ${(rateProfile.baseRate * 100).toFixed(2)}% + ${(
       rateProfile.variableRateMargin * 100
     ).toFixed(2)}% (${(rateProfile.reversionRate * 100).toFixed(2)}%)</p>`;
@@ -1775,6 +1881,10 @@
     ) {
       financeState.termYears = FINANCE_CONFIG.defaultTermYears;
     }
+    financeState.fixedPeriodYears = resolveFixedPeriodSelection(
+      financeState.termYears,
+      financeState.fixedPeriodYears
+    );
 
     if (elements.financePropertyName) {
       elements.financePropertyName.textContent = property.name;
@@ -1787,6 +1897,7 @@
 
     renderFinanceDepositOptions(property);
     renderFinanceTermOptions();
+    renderFinanceFixedPeriodOptions();
     renderFinancePaymentTypeOptions();
     updateFinancePreview();
 
@@ -2063,7 +2174,31 @@
           return;
         }
         financeState.termYears = years;
+        financeState.fixedPeriodYears = resolveFixedPeriodSelection(
+          financeState.termYears,
+          financeState.fixedPeriodYears
+        );
         renderFinanceTermOptions();
+        renderFinanceFixedPeriodOptions();
+        updateFinancePreview();
+      });
+    }
+
+    if (elements.financeFixedPeriodOptions) {
+      elements.financeFixedPeriodOptions.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-fixed-period-years]");
+        if (!button || button.disabled) {
+          return;
+        }
+        const years = Number.parseInt(button.dataset.fixedPeriodYears, 10);
+        if (!Number.isFinite(years)) {
+          return;
+        }
+        financeState.fixedPeriodYears = resolveFixedPeriodSelection(
+          financeState.termYears,
+          years
+        );
+        renderFinanceFixedPeriodOptions();
         updateFinancePreview();
       });
     }
@@ -2093,10 +2228,12 @@
           deriveMortgageRateProfile({
             depositRatio: financeState.depositRatio,
             termYears: financeState.termYears,
+            fixedPeriodYears: financeState.fixedPeriodYears,
           });
         const success = handleMortgagePurchase(property.id, {
           depositRatio: financeState.depositRatio,
           termYears: financeState.termYears,
+          fixedPeriodYears: financeState.fixedPeriodYears,
           rateProfile: profile,
           interestOnly: financeState.interestOnly,
         });
