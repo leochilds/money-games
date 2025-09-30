@@ -15,7 +15,7 @@ export const defaultProperties = [
       schoolRating: 5,
       crimeScore: 4,
     },
-    maintenanceLevel: "medium",
+    maintenancePercent: 65,
   },
   {
     id: "townhouse",
@@ -33,7 +33,7 @@ export const defaultProperties = [
       schoolRating: 7,
       crimeScore: 3,
     },
-    maintenanceLevel: "medium",
+    maintenancePercent: 58,
   },
   {
     id: "suburb",
@@ -51,7 +51,7 @@ export const defaultProperties = [
       schoolRating: 9,
       crimeScore: 2,
     },
-    maintenanceLevel: "low",
+    maintenancePercent: 72,
   },
   {
     id: "penthouse",
@@ -74,7 +74,7 @@ export const defaultProperties = [
       schoolRating: 8,
       crimeScore: 2,
     },
-    maintenanceLevel: "high",
+    maintenancePercent: 52,
   },
 ];
 
@@ -85,10 +85,12 @@ export const propertyTypeMultipliers = {
   luxury: 1.35,
 };
 
-export const maintenanceLevelMultipliers = {
-  low: 1.1,
-  medium: 1,
-  high: 0.88,
+export const MAINTENANCE_CONFIG = {
+  initialPercentRange: [25, 75],
+  occupiedDecayPerMonth: 4,
+  unoccupiedDecayPerMonth: 2,
+  refurbishmentCostRatio: 0.25,
+  criticalThreshold: 25,
 };
 
 export const FINANCE_CONFIG = {
@@ -161,7 +163,7 @@ export const proceduralPropertyArchetypes = [
     proximityRange: [0.7, 0.96],
     schoolRange: [4, 7],
     crimeRange: [3, 5],
-    maintenanceLevels: ["low", "medium"],
+    maintenancePercentRange: [40, 70],
     featuresPool: [
       "City View",
       "Shared Rooftop",
@@ -195,7 +197,7 @@ export const proceduralPropertyArchetypes = [
     proximityRange: [0.5, 0.75],
     schoolRange: [7, 10],
     crimeRange: [1, 3],
-    maintenanceLevels: ["low", "medium"],
+    maintenancePercentRange: [45, 75],
     featuresPool: [
       "Two-Car Garage",
       "Backyard Deck",
@@ -229,7 +231,7 @@ export const proceduralPropertyArchetypes = [
     proximityRange: [0.9, 0.99],
     schoolRange: [6, 9],
     crimeRange: [1, 3],
-    maintenanceLevels: ["medium", "high"],
+    maintenancePercentRange: [35, 60],
     featuresPool: [
       "Private Elevator",
       "Wraparound Terrace",
@@ -263,7 +265,7 @@ export const proceduralPropertyArchetypes = [
     proximityRange: [0.65, 0.85],
     schoolRange: [6, 9],
     crimeRange: [2, 4],
-    maintenanceLevels: ["medium"],
+    maintenancePercentRange: [40, 68],
     featuresPool: [
       "Private Patio",
       "Finished Basement",

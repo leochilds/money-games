@@ -1,11 +1,11 @@
 import {
   defaultProperties,
   propertyTypeMultipliers,
-  maintenanceLevelMultipliers,
   FINANCE_CONFIG,
   featureAddOns,
   proceduralPropertyArchetypes,
   MARKET_CONFIG,
+  MAINTENANCE_CONFIG,
 } from "./config.js";
 import {
   getRandomInt,
@@ -31,7 +31,13 @@ import {
       safety: 18,
     };
 
-    const { bedrooms = 0, bathrooms = 0, propertyType, features = [], location = {}, maintenanceLevel } = property;
+    const {
+      bedrooms = 0,
+      bathrooms = 0,
+      propertyType,
+      features = [],
+      location = {},
+    } = property;
 
     const proximityScore = (location.proximity ?? 0) * weights.proximity;
     const schoolScore = (location.schoolRating ?? 0) * weights.schoolRating;
@@ -52,9 +58,116 @@ import {
       featureScore;
 
     const typeMultiplier = propertyTypeMultipliers[propertyType] ?? 1;
-    const maintenanceMultiplier = maintenanceLevelMultipliers[maintenanceLevel] ?? 1;
 
-    return Math.round(baseValue * typeMultiplier * maintenanceMultiplier);
+    return Math.round(baseValue * typeMultiplier);
+  }
+
+  function clampMaintenancePercent(value) {
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+    return Math.min(Math.max(Math.round(value), 0), 100);
+  }
+
+  function calculateMaintenanceAdjustedValue(baseValue, maintenancePercent) {
+    const percent = clampMaintenancePercent(maintenancePercent);
+    return Math.max(Math.round((baseValue * percent) / 100), 0);
+  }
+
+  function getInitialMaintenancePercent(preferred) {
+    if (Number.isFinite(preferred)) {
+      return clampMaintenancePercent(preferred);
+    }
+
+    const [minPercent, maxPercent] = MAINTENANCE_CONFIG.initialPercentRange ?? [25, 75];
+    const lower = Number.isFinite(minPercent) ? minPercent : 25;
+    const upper = Number.isFinite(maxPercent) ? maxPercent : 75;
+    if (lower >= upper) {
+      return clampMaintenancePercent(lower);
+    }
+    return clampMaintenancePercent(getRandomInt(lower, upper));
+  }
+
+  function deriveMaintenancePercent(range, fallback) {
+    if (Array.isArray(range) && range.length === 2) {
+      const [min, max] = range;
+      const lower = Number.isFinite(min) ? min : fallback ?? MAINTENANCE_CONFIG.initialPercentRange?.[0];
+      const upper = Number.isFinite(max) ? max : fallback ?? MAINTENANCE_CONFIG.initialPercentRange?.[1];
+      if (Number.isFinite(lower) && Number.isFinite(upper) && lower < upper) {
+        return clampMaintenancePercent(getRandomInt(lower, upper));
+      }
+    }
+    return getInitialMaintenancePercent(fallback);
+  }
+
+  function refreshPropertyMarketValue(property) {
+    if (!property) {
+      return 0;
+    }
+
+    if (!Number.isFinite(property.baseValue)) {
+      property.baseValue = calculatePropertyValue(property);
+    }
+
+    property.cost = calculateMaintenanceAdjustedValue(
+      property.baseValue,
+      property.maintenancePercent
+    );
+
+    return property.cost;
+  }
+
+  function isPropertyVacant(property) {
+    return (property?.maintenanceWork?.monthsRemaining ?? 0) > 0;
+  }
+
+  function advancePropertiesForMonth() {
+    let rentCollected = 0;
+    const maintenanceCompletions = [];
+
+    state.portfolio.forEach((property) => {
+      const currentPercent =
+        property.maintenancePercent ?? getInitialMaintenancePercent();
+      const underMaintenance = isPropertyVacant(property);
+      const decayRate = underMaintenance
+        ? MAINTENANCE_CONFIG.unoccupiedDecayPerMonth ?? 0
+        : MAINTENANCE_CONFIG.occupiedDecayPerMonth ?? 0;
+
+      property.maintenancePercent = clampMaintenancePercent(
+        currentPercent - decayRate
+      );
+
+      if (!underMaintenance) {
+        rentCollected += property.monthlyRent ?? 0;
+      }
+
+      if (underMaintenance && property.maintenanceWork) {
+        property.maintenanceWork.monthsRemaining = Math.max(
+          (property.maintenanceWork.monthsRemaining ?? 0) - 1,
+          0
+        );
+        if (property.maintenanceWork.monthsRemaining <= 0) {
+          const cost = roundCurrency(property.maintenanceWork.cost ?? 0);
+          property.maintenancePercent = 100;
+          maintenanceCompletions.push({ property, cost });
+          property.maintenanceWork = null;
+        }
+      }
+
+      refreshPropertyMarketValue(property);
+    });
+
+    state.market.forEach((property) => {
+      const currentPercent =
+        property.maintenancePercent ?? getInitialMaintenancePercent();
+      const decayRate = MAINTENANCE_CONFIG.unoccupiedDecayPerMonth ?? 0;
+      property.maintenancePercent = clampMaintenancePercent(
+        currentPercent - decayRate
+      );
+      refreshPropertyMarketValue(property);
+    });
+
+    return { rentCollected: roundCurrency(rentCollected), maintenanceCompletions };
   }
 
   const state = {
@@ -125,20 +238,27 @@ import {
       locationDescriptor: pickRandom(archetype.locationDescriptors),
       demandScore,
       location,
-      maintenanceLevel: pickRandom(archetype.maintenanceLevels),
       marketAge: 0,
       introducedOnDay: state.day,
     };
 
-    const cost = calculatePropertyValue(baseProperty);
+    const baseValue = calculatePropertyValue(baseProperty);
+    const maintenancePercent = deriveMaintenancePercent(
+      archetype.maintenancePercentRange,
+      getInitialMaintenancePercent()
+    );
+    const cost = calculateMaintenanceAdjustedValue(baseValue, maintenancePercent);
     const annualYield = mapDemandToAnnualYield(baseProperty.demandScore);
     const monthlyRent = Math.round((cost * annualYield) / 12);
 
     return {
       ...baseProperty,
+      baseValue,
+      maintenancePercent,
       cost,
       annualYield,
       monthlyRent,
+      maintenanceWork: null,
     };
   }
 
@@ -699,17 +819,24 @@ import {
 
   function cloneDefaultProperties() {
     return defaultProperties.map((property) => {
-      const cost = calculatePropertyValue(property);
+      const baseValue = calculatePropertyValue(property);
+      const maintenancePercent = getInitialMaintenancePercent(
+        property.maintenancePercent
+      );
+      const cost = calculateMaintenanceAdjustedValue(baseValue, maintenancePercent);
       const annualYield = mapDemandToAnnualYield(property.demandScore);
       const monthlyRent = Math.round((cost * annualYield) / 12);
 
       return {
         ...property,
+        baseValue,
+        maintenancePercent,
         cost,
         annualYield,
         monthlyRent,
         marketAge: 0,
         introducedOnDay: state.day,
+        maintenanceWork: null,
       };
     });
   }
@@ -811,8 +938,15 @@ import {
     const monthsElapsed = Math.floor(daysSinceLastCollection / 30);
 
     if (monthsElapsed > 0) {
-      const grossRentPerMonth = calculateRentPerMonth();
-      const rentCollected = grossRentPerMonth * monthsElapsed;
+      let rentCollected = 0;
+      const maintenanceCompletions = [];
+
+      for (let month = 0; month < monthsElapsed; month += 1) {
+        const result = advancePropertiesForMonth();
+        rentCollected += result.rentCollected;
+        maintenanceCompletions.push(...result.maintenanceCompletions);
+      }
+
       state.balance += rentCollected;
       const startMonth = Math.floor(state.lastRentCollectionDay / 30) + 1;
       const endMonth = startMonth + monthsElapsed - 1;
@@ -822,6 +956,17 @@ import {
       addHistoryEntry(
         `Month${monthsElapsed > 1 ? "s" : ""} ${monthRange}: Collected ${formatCurrency(rentCollected)} in rent for ${monthLabel}.`
       );
+
+      maintenanceCompletions.forEach(({ property, cost }) => {
+        if (cost > 0) {
+          state.balance -= cost;
+        }
+        const costLabel = cost > 0 ? ` at a cost of ${formatCurrency(cost)}` : "";
+        addHistoryEntry(
+          `Maintenance completed on ${property.name}${costLabel}. Condition restored to 100%.`
+        );
+        state.balance = roundCurrency(state.balance);
+      });
 
       const {
         totalPaid: mortgagePaid,
@@ -871,7 +1016,8 @@ import {
 
   function calculateRentPerMonth() {
     return state.portfolio.reduce(
-      (total, property) => total + property.monthlyRent,
+      (total, property) =>
+        total + (isPropertyVacant(property) ? 0 : property.monthlyRent),
       0
     );
   }
@@ -894,7 +1040,8 @@ import {
       return 0;
     }
     const mortgagePayment = getNextMortgagePayment(property.mortgage);
-    const net = property.monthlyRent - mortgagePayment;
+    const effectiveRent = isPropertyVacant(property) ? 0 : property.monthlyRent;
+    const net = effectiveRent - mortgagePayment;
     return roundCurrency(net);
   }
 
@@ -1042,11 +1189,13 @@ import {
       return 0;
     }
 
-    const baseCost = Number.isFinite(property.cost)
-      ? property.cost
+    const baseValue = Number.isFinite(property.baseValue)
+      ? property.baseValue
       : calculatePropertyValue(property);
+    const maintenancePercent =
+      property.maintenancePercent ?? getInitialMaintenancePercent();
 
-    return Math.max(Math.round(baseCost), 0);
+    return calculateMaintenanceAdjustedValue(baseValue, maintenancePercent);
   }
 
   function handleCashPurchase(propertyId) {
@@ -1149,6 +1298,22 @@ import {
     }
 
     const property = state.portfolio[propertyIndex];
+    const maintenanceThreshold = MAINTENANCE_CONFIG.criticalThreshold ?? 25;
+    const currentMaintenance = property.maintenancePercent ?? 0;
+    if (currentMaintenance < maintenanceThreshold) {
+      addHistoryEntry(
+        `Unable to sell ${property.name}: maintenance at ${currentMaintenance}% is below the required ${maintenanceThreshold}%.`
+      );
+      return;
+    }
+
+    if (isPropertyVacant(property)) {
+      addHistoryEntry(
+        `Unable to sell ${property.name} while maintenance work is underway.`
+      );
+      return;
+    }
+
     const salePrice = calculateSalePrice(property);
     let mortgagePayoff = 0;
     let outstandingInterest = 0;
@@ -1178,6 +1343,51 @@ import {
       addHistoryEntry(`Sold ${property.name} for ${formatCurrency(salePrice)}.`);
     }
     state.balance = roundCurrency(state.balance);
+    updateUI();
+  }
+
+  function scheduleMaintenance(propertyId) {
+    const property = state.portfolio.find((item) => item.id === propertyId);
+    if (!property) {
+      return;
+    }
+
+    if (isPropertyVacant(property)) {
+      addHistoryEntry(
+        `${property.name} already has maintenance scheduled.`
+      );
+      return;
+    }
+
+    const currentPercent = property.maintenancePercent ?? 0;
+    if (currentPercent >= 100) {
+      addHistoryEntry(`${property.name} is already at 100% maintenance.`);
+      return;
+    }
+
+    const baseValue = Number.isFinite(property.baseValue)
+      ? property.baseValue
+      : calculatePropertyValue(property);
+    const deficiencyRatio = Math.max(0, 100 - currentPercent) / 100;
+    const costRatio = MAINTENANCE_CONFIG.refurbishmentCostRatio ?? 0.25;
+    const projectedCost = roundCurrency(baseValue * costRatio * deficiencyRatio);
+
+    if (projectedCost > state.balance) {
+      addHistoryEntry(
+        `Unable to schedule maintenance for ${property.name}: requires ${formatCurrency(projectedCost)} but only ${formatCurrency(state.balance)} is available.`
+      );
+      return;
+    }
+
+    property.maintenanceWork = {
+      monthsRemaining: 1,
+      cost: projectedCost,
+      scheduledOnDay: state.day,
+    };
+
+    addHistoryEntry(
+      `Scheduled maintenance for ${property.name}: property will be vacant for 1 month (estimated cost ${formatCurrency(projectedCost)}).`
+    );
     updateUI();
   }
 
@@ -1227,13 +1437,26 @@ import {
         : "";
       locationDetails.innerHTML = `<strong>Location:</strong> ${descriptor}${proximityPercent}% transit access · Schools ${schoolRating}/10 · Crime score ${crimeScore}/10`;
 
-      const maintenance = document.createElement("p");
-      maintenance.className = "small text-muted mb-2";
-      const maintenanceLabel = (property.maintenanceLevel ?? "").replace(
-        /(^|_)([a-z])/g,
-        (_, prefix, char) => `${prefix === "_" ? " " : ""}${char.toUpperCase()}`
+      const maintenanceWrapper = document.createElement("div");
+      maintenanceWrapper.className = "mb-2";
+      const maintenanceLabel = document.createElement("p");
+      maintenanceLabel.className = "small text-muted mb-1";
+      const maintenancePercentLabel = clampMaintenancePercent(
+        property.maintenancePercent ?? 0
       );
-      maintenance.innerHTML = `<strong>Maintenance:</strong> ${maintenanceLabel || "Unknown"}`;
+      maintenanceLabel.innerHTML = `<strong>Maintenance:</strong> ${maintenancePercentLabel}% condition`;
+      const maintenanceProgress = document.createElement("div");
+      maintenanceProgress.className = "progress maintenance-progress";
+      const maintenanceProgressBar = document.createElement("div");
+      maintenanceProgressBar.className = "progress-bar";
+      maintenanceProgressBar.role = "progressbar";
+      maintenanceProgressBar.style.width = `${maintenancePercentLabel}%`;
+      maintenanceProgressBar.setAttribute("aria-valuenow", maintenancePercentLabel.toString());
+      maintenanceProgressBar.setAttribute("aria-valuemin", "0");
+      maintenanceProgressBar.setAttribute("aria-valuemax", "100");
+      maintenanceProgressBar.textContent = `${maintenancePercentLabel}%`;
+      maintenanceProgress.append(maintenanceProgressBar);
+      maintenanceWrapper.append(maintenanceLabel, maintenanceProgress);
 
       const demand = document.createElement("p");
       demand.className = "small text-muted mb-2";
@@ -1310,7 +1533,7 @@ import {
         ...(features.childElementCount ? [features] : []),
         locationDetails,
         demand,
-        maintenance
+        maintenanceWrapper
       );
 
       cardBody.append(title, description, detailSection, cost, rent, mortgageInfo, buttonGroup);
@@ -1642,6 +1865,35 @@ import {
         info.append(descriptionElement);
       }
 
+      const maintenancePercent = clampMaintenancePercent(
+        property.maintenancePercent ?? 0
+      );
+      const maintenanceBlock = document.createElement("div");
+      maintenanceBlock.className = "maintenance-status";
+      const maintenanceLabel = document.createElement("div");
+      maintenanceLabel.className = "small text-muted mb-1";
+      const maintenanceNotes = [];
+      if (isPropertyVacant(property)) {
+        maintenanceNotes.push("maintenance scheduled");
+      }
+      const notesSuffix = maintenanceNotes.length
+        ? ` (${maintenanceNotes.join(", ")})`
+        : "";
+      maintenanceLabel.innerHTML = `<strong>Maintenance:</strong> ${maintenancePercent}% condition${notesSuffix}`;
+      const maintenanceProgress = document.createElement("div");
+      maintenanceProgress.className = "progress maintenance-progress";
+      const maintenanceProgressBar = document.createElement("div");
+      maintenanceProgressBar.className = "progress-bar";
+      maintenanceProgressBar.role = "progressbar";
+      maintenanceProgressBar.style.width = `${maintenancePercent}%`;
+      maintenanceProgressBar.setAttribute("aria-valuenow", maintenancePercent.toString());
+      maintenanceProgressBar.setAttribute("aria-valuemin", "0");
+      maintenanceProgressBar.setAttribute("aria-valuemax", "100");
+      maintenanceProgressBar.textContent = `${maintenancePercent}%`;
+      maintenanceProgress.append(maintenanceProgressBar);
+      maintenanceBlock.append(maintenanceLabel, maintenanceProgress);
+      info.append(maintenanceBlock);
+
       const cashflowDetails = document.createElement("div");
       cashflowDetails.className = "small text-muted";
       let mortgageBreakdown = null;
@@ -1770,6 +2022,14 @@ import {
       rentBadge.className = `badge ${netCash >= 0 ? "bg-success" : "bg-danger"} rounded-pill`;
       rentBadge.textContent = `Net / month: ${formatCurrency(netCash)}`;
 
+      const maintenanceButton = document.createElement("button");
+      maintenanceButton.type = "button";
+      maintenanceButton.className = "btn btn-outline-secondary btn-sm";
+      maintenanceButton.textContent = "Schedule maintenance";
+      const canSchedule = !isPropertyVacant(property) && maintenancePercent < 100;
+      maintenanceButton.disabled = !canSchedule;
+      maintenanceButton.addEventListener("click", () => scheduleMaintenance(property.id));
+
       const salePrice = calculateSalePrice(property);
       let netSaleLabel = `Sell for ${formatCurrency(salePrice)}`;
       if (mortgageBreakdown) {
@@ -1785,7 +2045,7 @@ import {
       sellButton.textContent = netSaleLabel;
       sellButton.addEventListener("click", () => handleSale(property.id));
 
-      actionWrapper.append(rentBadge, sellButton);
+      actionWrapper.append(rentBadge, maintenanceButton, sellButton);
 
       item.append(info, actionWrapper);
       elements.incomeStatus.append(item);
