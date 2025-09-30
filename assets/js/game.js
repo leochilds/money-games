@@ -1819,14 +1819,29 @@
       : `<p class="mb-1"><strong>Payments:</strong> ${formatCurrency(
           mortgage.monthlyPayment
         )} / month over ${mortgage.termYears} years</p>`;
+    const monthlyRent = Number.isFinite(property.monthlyRent)
+      ? property.monthlyRent
+      : 0;
+    const monthlyNetCashFlow = roundCurrency(monthlyRent - mortgage.monthlyPayment);
+    const netCashFlowFormatted =
+      monthlyNetCashFlow > 0
+        ? `+${formatCurrency(monthlyNetCashFlow)}`
+        : formatCurrency(monthlyNetCashFlow);
+    const netCashFlowClass =
+      monthlyNetCashFlow >= 0 ? "text-success" : "text-danger";
     const displayFixedYears = mortgage.fixedPeriodYears;
-    const rateLine = `<p class="${financeState.interestOnly ? "mb-1" : "mb-0"}"><strong>Rate:</strong> Fixed ${(rateProfile.fixedRate * 100).toFixed(
+    const rateLine = `<p class="mb-1"><strong>Rate:</strong> Fixed ${(rateProfile.fixedRate * 100).toFixed(
       2
     )}% for ${displayFixedYears} year${
       displayFixedYears === 1 ? "" : "s"
     }, then base ${(rateProfile.baseRate * 100).toFixed(2)}% + ${(
       rateProfile.variableRateMargin * 100
     ).toFixed(2)}% (${(rateProfile.reversionRate * 100).toFixed(2)}%)</p>`;
+    const variableTransitionNote = `<p class="mb-0 small text-muted">Net cash flow shown applies during the fixed ${(rateProfile.fixedRate * 100).toFixed(
+      2
+    )}% period (${displayFixedYears} year${displayFixedYears === 1 ? "" : "s"}). Afterward payments follow base ${(rateProfile.baseRate * 100).toFixed(
+      2
+    )}% + ${(rateProfile.variableRateMargin * 100).toFixed(2)}% (${(rateProfile.reversionRate * 100).toFixed(2)}%), so your returns may change.</p>`;
     const interestOnlyNote = financeState.interestOnly
       ? `<p class="mb-0 text-muted">Principal of ${formatCurrency(
           mortgage.principal
@@ -1839,7 +1854,9 @@
       )})</p>
       <p class="mb-1"><strong>Financed amount:</strong> ${formatCurrency(mortgage.principal)}</p>
       ${paymentSummary}
+      <p class="mb-1 ${netCashFlowClass}"><strong>Monthly net cash flow (fixed period):</strong> ${netCashFlowFormatted}</p>
       ${rateLine}
+      ${variableTransitionNote}
       ${interestOnlyNote}
     `;
 
