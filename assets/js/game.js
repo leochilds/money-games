@@ -129,6 +129,9 @@ import {
     if (!property) {
       return 0;
     }
+    if (isPropertyVacant(property)) {
+      return 0;
+    }
     return hasActiveTenant(property) ? property.tenant.rent ?? 0 : 0;
   }
 
