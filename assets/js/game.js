@@ -335,6 +335,7 @@
     termYears: FINANCE_CONFIG.defaultTermYears,
     annualInterestRate: FINANCE_CONFIG.centralBank.initialRate,
     rateProfile: null,
+    interestOnly: false,
   };
 
   let financeModalInstance = null;
@@ -530,6 +531,9 @@
     elements.financePropertySummary = document.getElementById("financePropertySummary");
     elements.financeDepositOptions = document.getElementById("financeDepositOptions");
     elements.financeTermOptions = document.getElementById("financeTermOptions");
+    elements.financePaymentTypeOptions = document.getElementById(
+      "financePaymentTypeOptions"
+    );
     elements.financePaymentPreview = document.getElementById("financePaymentPreview");
     elements.financeAffordabilityNote = document.getElementById("financeAffordabilityNote");
     elements.confirmFinanceButton = document.getElementById("confirmFinanceButton");
@@ -1657,6 +1661,21 @@
       .join("");
   }
 
+  function renderFinancePaymentTypeOptions() {
+    if (!elements.financePaymentTypeOptions) {
+      return;
+    }
+    const buttons = elements.financePaymentTypeOptions.querySelectorAll(
+      "button[data-interest-only]"
+    );
+    buttons.forEach((button) => {
+      const isInterestOnly = button.dataset.interestOnly === "true";
+      const isActive = isInterestOnly === financeState.interestOnly;
+      button.classList.toggle("active", isActive);
+      button.setAttribute("aria-pressed", isActive ? "true" : "false");
+    });
+  }
+
   function updateFinancePreview() {
     if (!elements.financePaymentPreview) {
       return;
@@ -1684,22 +1703,38 @@
       depositRatio: financeState.depositRatio,
       termYears: financeState.termYears,
       rateProfile,
+      interestOnly: financeState.interestOnly,
     });
     const canAffordDeposit = state.balance >= mortgage.deposit;
+
+    const paymentSummary = financeState.interestOnly
+      ? `<p class="mb-1"><strong>Payments:</strong> Interest-only ${formatCurrency(
+          mortgage.monthlyPayment
+        )} / month for ${mortgage.termYears} years</p>`
+      : `<p class="mb-1"><strong>Payments:</strong> ${formatCurrency(
+          mortgage.monthlyPayment
+        )} / month over ${mortgage.termYears} years</p>`;
+    const rateLine = `<p class="${financeState.interestOnly ? "mb-1" : "mb-0"}"><strong>Rate:</strong> Fixed ${(rateProfile.fixedRate * 100).toFixed(
+      2
+    )}% for ${rateProfile.fixedPeriodYears} year${
+      rateProfile.fixedPeriodYears === 1 ? "" : "s"
+    }, then base ${(rateProfile.baseRate * 100).toFixed(2)}% + ${(
+      rateProfile.variableRateMargin * 100
+    ).toFixed(2)}% (${(rateProfile.reversionRate * 100).toFixed(2)}%)</p>`;
+    const interestOnlyNote = financeState.interestOnly
+      ? `<p class="mb-0 text-muted">Principal of ${formatCurrency(
+          mortgage.principal
+        )} remains due at the end of the term. Plan to refinance, sell, or repay the balance.</p>`
+      : "";
 
     elements.financePaymentPreview.innerHTML = `
       <p class="mb-1"><strong>Deposit:</strong> ${formatCurrency(mortgage.deposit)} (${formatPercentage(
         financeState.depositRatio
       )})</p>
       <p class="mb-1"><strong>Financed amount:</strong> ${formatCurrency(mortgage.principal)}</p>
-      <p class="mb-1"><strong>Payments:</strong> ${formatCurrency(
-        mortgage.monthlyPayment
-      )} / month over ${mortgage.termYears} years</p>
-      <p class="mb-0"><strong>Rate:</strong> Fixed ${(rateProfile.fixedRate * 100).toFixed(2)}% for ${
-        rateProfile.fixedPeriodYears
-      } year${rateProfile.fixedPeriodYears === 1 ? "" : "s"}, then base ${(rateProfile.baseRate * 100).toFixed(2)}% + ${(
-        rateProfile.variableRateMargin * 100
-      ).toFixed(2)}% (${(rateProfile.reversionRate * 100).toFixed(2)}%)</p>
+      ${paymentSummary}
+      ${rateLine}
+      ${interestOnlyNote}
     `;
 
     if (elements.financeAffordabilityNote) {
@@ -1752,6 +1787,7 @@
 
     renderFinanceDepositOptions(property);
     renderFinanceTermOptions();
+    renderFinancePaymentTypeOptions();
     updateFinancePreview();
 
     if (!financeModalInstance && window.bootstrap?.Modal) {
@@ -2032,6 +2068,19 @@
       });
     }
 
+    if (elements.financePaymentTypeOptions) {
+      elements.financePaymentTypeOptions.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-interest-only]");
+        if (!button) {
+          return;
+        }
+        const isInterestOnly = button.dataset.interestOnly === "true";
+        financeState.interestOnly = isInterestOnly;
+        renderFinancePaymentTypeOptions();
+        updateFinancePreview();
+      });
+    }
+
     if (elements.confirmFinanceButton) {
       elements.confirmFinanceButton.addEventListener("click", (event) => {
         event.preventDefault();
@@ -2049,6 +2098,7 @@
           depositRatio: financeState.depositRatio,
           termYears: financeState.termYears,
           rateProfile: profile,
+          interestOnly: financeState.interestOnly,
         });
         if (success) {
           financeState.propertyId = null;

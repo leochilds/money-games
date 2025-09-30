@@ -133,6 +133,32 @@
               <div id="financeTermOptions" class="d-flex flex-wrap gap-2"></div>
             </div>
             <div class="mb-3">
+              <h6 class="mb-2">Payment structure</h6>
+              <div
+                id="financePaymentTypeOptions"
+                class="btn-group"
+                role="group"
+                aria-label="Select payment structure"
+              >
+                <button
+                  type="button"
+                  class="btn btn-outline-secondary"
+                  data-interest-only="false"
+                  aria-pressed="true"
+                >
+                  Repayment
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-outline-secondary"
+                  data-interest-only="true"
+                  aria-pressed="false"
+                >
+                  Interest-only
+                </button>
+              </div>
+            </div>
+            <div class="mb-3">
               <h6 class="mb-2">Payment preview</h6>
               <div
                 id="financePaymentPreview"
