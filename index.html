@@ -26,7 +26,16 @@
           <div class="card shadow-sm h-100">
             <div class="card-header bg-success text-white">Player Overview</div>
             <div class="card-body">
-              <p class="lead">Current Day: <span id="currentDay">1</span></p>
+              <p class="lead">
+                Current Day:
+                <span id="currentDay">1</span>
+                <span
+                  id="gamePausedBadge"
+                  class="badge bg-warning text-dark ms-2 d-none"
+                >
+                  Paused
+                </span>
+              </p>
               <p class="lead">
                 Balance: <span id="playerBalance" class="fw-bold text-success"></span>
               </p>
