@@ -122,6 +122,29 @@ import {
     return (property?.maintenanceWork?.monthsRemaining ?? 0) > 0;
   }
 
+  function getMaintenanceThreshold() {
+    const threshold = MAINTENANCE_CONFIG.criticalThreshold;
+    return Number.isFinite(threshold) ? threshold : 25;
+  }
+
+  function isMaintenanceBelowRentalThreshold(property) {
+    if (!property) {
+      return false;
+    }
+    const maintenancePercent = clampMaintenancePercent(property.maintenancePercent ?? 0);
+    return maintenancePercent < getMaintenanceThreshold();
+  }
+
+  function canAdvertiseForRent(property) {
+    if (!property) {
+      return false;
+    }
+    if (isPropertyVacant(property)) {
+      return false;
+    }
+    return !isMaintenanceBelowRentalThreshold(property);
+  }
+
   function hasActiveTenant(property) {
     return Boolean(property?.tenant && (property.tenant.leaseMonthsRemaining ?? 0) > 0);
   }
@@ -502,6 +525,8 @@ import {
     const activeTenant = hasActiveTenant(property);
     const rentOption = findRentStrategyOption(property, property.askingRentOption);
     const maintenanceVacant = isPropertyVacant(property);
+    const maintenanceRestricted = isMaintenanceBelowRentalThreshold(property);
+    const maintenanceThreshold = getMaintenanceThreshold();
 
     if (activeTenant) {
       statusList.innerHTML = `
@@ -514,14 +539,23 @@ import {
       const chance = rentOption
         ? `${Math.round((rentOption.probability ?? 0) * 100)}%`
         : "-";
+      const statusNotes = [];
+      if (maintenanceVacant) {
+        statusNotes.push("maintenance in progress");
+      }
+      if (maintenanceRestricted && !maintenanceVacant) {
+        statusNotes.push(`maintenance below ${maintenanceThreshold}%`);
+      }
+      const statusSuffix = statusNotes.length > 0 ? ` (${statusNotes.join("; ")})` : "";
       statusList.innerHTML = `
-        <li><strong>Status:</strong> Vacant${
-          maintenanceVacant ? " (maintenance in progress)" : ""
-        }</li>
+        <li><strong>Status:</strong> Vacant${statusSuffix}</li>
         <li><strong>Target rent:</strong> ${formatCurrency(
           rentOption?.monthlyRent ?? 0
         )} (${chance} monthly hit)</li>
       `;
+    }
+    if (maintenanceRestricted && activeTenant) {
+      statusList.innerHTML += `<li><strong>Note:</strong> Maintenance must reach ${maintenanceThreshold}% before new tenancies can begin.</li>`;
     }
     statusList.innerHTML += `<li><strong>Auto-relist:</strong> ${
       property.autoRelist ? "Enabled" : "Disabled"
@@ -595,16 +629,18 @@ import {
       marketingButton.textContent = property.rentalMarketingActive
         ? "Pause advertising"
         : "List for rent";
-      marketingButton.disabled = maintenanceVacant;
+      marketingButton.disabled = maintenanceVacant || maintenanceRestricted;
       marketingButton.addEventListener("click", () => {
         handleMarketingToggle(property.id, !property.rentalMarketingActive);
         refreshManagementContext({ closeIfMissing: false });
       });
       controlsCard.append(marketingButton);
-      if (maintenanceVacant) {
+      if (maintenanceVacant || maintenanceRestricted) {
         const note = document.createElement("div");
         note.className = "management-note mt-2";
-        note.textContent = "Advertising resumes once maintenance is complete.";
+        note.textContent = maintenanceVacant
+          ? "Advertising resumes once maintenance is complete."
+          : `Increase maintenance above ${maintenanceThreshold}% before advertising.`;
         controlsCard.append(note);
       }
     }
@@ -1239,11 +1275,17 @@ import {
 
   function startRentalMarketing(property) {
     if (!property) {
-      return;
+      return false;
     }
     ensurePropertyRentSettings(property);
+    if (!canAdvertiseForRent(property)) {
+      property.rentalMarketingActive = false;
+      property.vacancyMonths = 0;
+      return false;
+    }
     property.rentalMarketingActive = true;
     property.vacancyMonths = 0;
+    return true;
   }
 
   function stopRentalMarketing(property) {
@@ -1270,6 +1312,8 @@ import {
     let rentCollected = 0;
 
     const maintenanceVacancy = isPropertyVacant(property);
+    const maintenanceRestricted = isMaintenanceBelowRentalThreshold(property);
+    const maintenanceThreshold = getMaintenanceThreshold();
 
     if (hasActiveTenant(property)) {
       if (!maintenanceVacancy) {
@@ -1311,10 +1355,28 @@ import {
     property.monthlyRent = 0;
     property.leaseMonthsRemaining = 0;
 
-    if (maintenanceVacancy || !property.rentalMarketingActive) {
+    if (maintenanceVacancy) {
       if (property.rentalMarketingActive) {
         property.vacancyMonths = (property.vacancyMonths ?? 0) + 1;
       }
+      return rentCollected;
+    }
+
+    if (maintenanceRestricted) {
+      if (property.rentalMarketingActive) {
+        property.rentalMarketingActive = false;
+        property.vacancyMonths = 0;
+        events.push({
+          type: "marketingPausedMaintenance",
+          property,
+          maintenancePercent: clampMaintenancePercent(property.maintenancePercent ?? 0),
+          threshold: maintenanceThreshold,
+        });
+      }
+      return rentCollected;
+    }
+
+    if (!property.rentalMarketingActive) {
       return rentCollected;
     }
 
@@ -2407,6 +2469,13 @@ import {
               addHistoryEntry(summary);
               break;
             }
+            case "marketingPausedMaintenance": {
+              const maintenanceLabel = `${(event.maintenancePercent ?? 0).toFixed(1)}%`;
+              addHistoryEntry(
+                `Paused advertising for ${event.property.name}: maintenance at ${maintenanceLabel} is below the required ${event.threshold}%.`
+              );
+              break;
+            }
             default:
               break;
           }
@@ -2690,13 +2759,21 @@ import {
 
     if (scope === "portfolio") {
       if (enabled && !hasActiveTenant(property) && !property.rentalMarketingActive) {
-        startRentalMarketing(property);
-        const option = findRentStrategyOption(property, property.askingRentOption);
-        addHistoryEntry(
-          `Auto-relisting enabled for ${property.name}: targeting ${formatCurrency(
-            option?.monthlyRent ?? 0
-          )} (${Math.round((option?.probability ?? 0) * 100)}% monthly hit).`
-        );
+        const started = startRentalMarketing(property);
+        if (started) {
+          const option = findRentStrategyOption(property, property.askingRentOption);
+          addHistoryEntry(
+            `Auto-relisting enabled for ${property.name}: targeting ${formatCurrency(
+              option?.monthlyRent ?? 0
+            )} (${Math.round((option?.probability ?? 0) * 100)}% monthly hit).`
+          );
+        } else {
+          const maintenancePercent = clampMaintenancePercent(property.maintenancePercent ?? 0);
+          const threshold = getMaintenanceThreshold();
+          addHistoryEntry(
+            `Auto-relisting enabled for ${property.name}, but maintenance at ${maintenancePercent.toFixed(1)}% must reach ${threshold}% before advertising can resume.`
+          );
+        }
       } else if (!enabled) {
         stopRentalMarketing(property);
         addHistoryEntry(`Auto-relisting disabled for ${property.name}.`);
@@ -2715,13 +2792,21 @@ import {
     }
 
     if (shouldMarket) {
-      startRentalMarketing(property);
-      const option = findRentStrategyOption(property, property.askingRentOption);
-      addHistoryEntry(
-        `Listed ${property.name} for rent at ${formatCurrency(option?.monthlyRent ?? 0)} (${Math.round(
-          (option?.probability ?? 0) * 100
-        )}% monthly hit).`
-      );
+      const started = startRentalMarketing(property);
+      if (started) {
+        const option = findRentStrategyOption(property, property.askingRentOption);
+        addHistoryEntry(
+          `Listed ${property.name} for rent at ${formatCurrency(option?.monthlyRent ?? 0)} (${Math.round(
+            (option?.probability ?? 0) * 100
+          )}% monthly hit).`
+        );
+      } else {
+        const maintenancePercent = clampMaintenancePercent(property.maintenancePercent ?? 0);
+        const threshold = getMaintenanceThreshold();
+        addHistoryEntry(
+          `Unable to list ${property.name} for rent: maintenance at ${maintenancePercent.toFixed(1)}% must reach ${threshold}%.`
+        );
+      }
     } else {
       stopRentalMarketing(property);
       addHistoryEntry(`Paused advertising for ${property.name}.`);
@@ -2761,7 +2846,10 @@ import {
       purchased.monthlyRent = 0;
       purchased.leaseMonthsRemaining = 0;
       if (purchased.autoRelist) {
-        startRentalMarketing(purchased);
+        const started = startRentalMarketing(purchased);
+        if (!started) {
+          stopRentalMarketing(purchased);
+        }
       } else {
         stopRentalMarketing(purchased);
       }
@@ -3544,6 +3632,9 @@ import {
       const maintenanceNotes = [];
       if (isPropertyVacant(property)) {
         maintenanceNotes.push("maintenance scheduled");
+      }
+      if (isMaintenanceBelowRentalThreshold(property)) {
+        maintenanceNotes.push(`below ${getMaintenanceThreshold()}% (leasing paused)`);
       }
       const notesSuffix = maintenanceNotes.length
         ? ` (${maintenanceNotes.join(", ")})`
