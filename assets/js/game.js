@@ -176,32 +176,167 @@ import {
     return parts.join(" ");
   }
 
-  const RENT_STRATEGY_PROFILES = [
-    {
-      key: "value",
-      label: "Value seeker",
-      rateOffset: -0.0075,
-      probabilityScale: 1.15,
-      leaseMonths: 9,
-      description: "Lower rent, faster tenant placement.",
-    },
-    {
-      key: "market",
-      label: "Market rate",
-      rateOffset: 0,
-      probabilityScale: 1,
-      leaseMonths: 12,
-      description: "Balanced rent aligned with base rate.",
-    },
-    {
-      key: "premium",
-      label: "Premium",
-      rateOffset: 0.01,
-      probabilityScale: 0.7,
-      leaseMonths: 15,
-      description: "Higher rent with slower tenant uptake.",
-    },
+  const LEASE_LENGTH_CHOICES = [6, 12, 18, 24, 36];
+  const RENT_RATE_OFFSETS = [
+    0.01,
+    0.02,
+    0.03,
+    0.04,
+    0.05,
+    0.06,
+    0.07,
+    0.08,
+    0.09,
+    0.1,
   ];
+
+  function createRentPlanKey(leaseMonths, rateOffset) {
+    const leaseValue = Number.isFinite(leaseMonths) ? Math.round(leaseMonths) : 12;
+    const offsetPercent = Math.round((rateOffset ?? 0.05) * 100);
+    return `lease-${leaseValue}-rate-${offsetPercent}`;
+  }
+
+  function parseRentPlanKey(optionKey) {
+    if (typeof optionKey !== "string") {
+      return null;
+    }
+    const legacyPresets = {
+      value: { leaseMonths: 12, rateOffset: 0.02 },
+      market: { leaseMonths: 12, rateOffset: 0.05 },
+      premium: { leaseMonths: 12, rateOffset: 0.08 },
+    };
+    if (legacyPresets[optionKey]) {
+      return legacyPresets[optionKey];
+    }
+    const match = /^lease-(\d+)-rate-(\d+)$/.exec(optionKey);
+    if (!match) {
+      return null;
+    }
+    const leaseMonths = Number.parseInt(match[1], 10);
+    const ratePercent = Number.parseInt(match[2], 10);
+    if (!Number.isFinite(leaseMonths) || !Number.isFinite(ratePercent)) {
+      return null;
+    }
+    return {
+      leaseMonths,
+      rateOffset: ratePercent / 100,
+    };
+  }
+
+  function normaliseChoice(value, choices, fallback) {
+    if (!Array.isArray(choices) || choices.length === 0) {
+      return fallback;
+    }
+    const validFallback = choices.includes(fallback) ? fallback : choices[Math.floor(choices.length / 2)];
+    if (choices.includes(value)) {
+      return value;
+    }
+    const numericValue = Number.isFinite(value) ? Number(value) : Number.NaN;
+    if (Number.isNaN(numericValue)) {
+      return validFallback;
+    }
+    return choices.reduce((closest, option) => {
+      if (!Number.isFinite(option)) {
+        return closest;
+      }
+      const currentDistance = Math.abs(option - numericValue);
+      const bestDistance = Math.abs(closest - numericValue);
+      return currentDistance < bestDistance ? option : closest;
+    }, choices[0]);
+  }
+
+  function resolveLeaseMonths(value) {
+    return normaliseChoice(value, LEASE_LENGTH_CHOICES, 12);
+  }
+
+  function resolveRateOffset(value) {
+    return normaliseChoice(value, RENT_RATE_OFFSETS, 0.05);
+  }
+
+  function resolveRentSettings(property, overrides = {}) {
+    const parsed = parseRentPlanKey(property?.askingRentOption);
+    const settings = {
+      leaseMonths:
+        overrides.leaseMonths ??
+        property?.rentSettings?.leaseMonths ??
+        parsed?.leaseMonths ??
+        property?.tenant?.leaseLengthMonths ??
+        12,
+      rateOffset:
+        overrides.rateOffset ??
+        property?.rentSettings?.rateOffset ??
+        parsed?.rateOffset ??
+        0.05,
+    };
+
+    return {
+      leaseMonths: resolveLeaseMonths(settings.leaseMonths),
+      rateOffset: resolveRateOffset(settings.rateOffset),
+    };
+  }
+
+  function calculateTenantProbability(property, leaseMonths, rateOffset) {
+    const demandScore = clampDemandScore(property?.demandScore);
+    const baseProbability = Math.min(0.2 + (demandScore / 10) * 0.6, 0.95);
+
+    const rentIndex = Math.max(RENT_RATE_OFFSETS.indexOf(rateOffset), 0);
+    const rentRatio = RENT_RATE_OFFSETS.length > 1
+      ? rentIndex / (RENT_RATE_OFFSETS.length - 1)
+      : 0;
+    const rentFactor = Math.max(1 - rentRatio * 0.5, 0.35);
+
+    const leaseIndex = Math.max(LEASE_LENGTH_CHOICES.indexOf(leaseMonths), 0);
+    const leaseRatio = LEASE_LENGTH_CHOICES.length > 1
+      ? leaseIndex / (LEASE_LENGTH_CHOICES.length - 1)
+      : 0;
+
+    let leaseFactor = 1;
+    if (rateOffset <= 0.05 + 1e-6) {
+      leaseFactor += (leaseRatio - 0.5) * 0.4;
+    } else if (rateOffset >= 0.06 - 1e-6) {
+      leaseFactor += (0.5 - leaseRatio) * 0.4;
+    }
+
+    const probability = Math.min(
+      Math.max(baseProbability * rentFactor * Math.max(leaseFactor, 0.6), 0.05),
+      0.95
+    );
+
+    return Math.round(probability * 1000) / 1000;
+  }
+
+  function buildRentPlan(property, leaseMonths, rateOffset) {
+    const resolvedLease = resolveLeaseMonths(leaseMonths);
+    const resolvedRate = resolveRateOffset(rateOffset);
+    const propertyCost = Number.isFinite(property?.cost)
+      ? property.cost
+      : calculateMaintenanceAdjustedValue(
+          Number.isFinite(property?.baseValue)
+            ? property.baseValue
+            : calculatePropertyValue(property),
+          property?.maintenancePercent ?? getInitialMaintenancePercent()
+        );
+
+    const defaultBaseRate = FINANCE_CONFIG?.centralBank?.initialRate ?? 0;
+    const baseRateCandidate = Number.isFinite(state.centralBankRate)
+      ? state.centralBankRate
+      : defaultBaseRate;
+    const baseRate = Math.max(baseRateCandidate ?? 0, 0);
+    const annualRate = Math.max(baseRate + resolvedRate, 0.001);
+    const monthlyRent = roundCurrency((propertyCost * annualRate) / 12);
+    const probability = calculateTenantProbability(property, resolvedLease, resolvedRate);
+    const offsetPercent = Math.round(resolvedRate * 100);
+
+    return {
+      key: createRentPlanKey(resolvedLease, resolvedRate),
+      leaseMonths: resolvedLease,
+      rateOffset: resolvedRate,
+      monthlyRent,
+      annualRate,
+      probability,
+      label: `Lease ${resolvedLease} months · Base +${offsetPercent}%`,
+    };
+  }
 
   function clampDemandScore(score) {
     if (!Number.isFinite(score)) {
@@ -215,35 +350,9 @@ import {
       return [];
     }
 
-    const demandScore = clampDemandScore(property.demandScore);
-    const demandFactor = demandScore / 10;
-    const baseAnnualYield = Math.max(0.01 + (state.centralBankRate ?? 0), 0.01);
-    const propertyCost = Number.isFinite(property.cost)
-      ? property.cost
-      : calculateMaintenanceAdjustedValue(
-          Number.isFinite(property.baseValue)
-            ? property.baseValue
-            : calculatePropertyValue(property),
-          property.maintenancePercent ?? getInitialMaintenancePercent()
-        );
-
-    const baseProbability = Math.min(0.2 + demandFactor * 0.6, 0.95);
-
-    return RENT_STRATEGY_PROFILES.map((profile) => {
-      const annualYield = Math.max(baseAnnualYield + profile.rateOffset, 0.005);
-      const monthlyRent = roundCurrency((propertyCost * annualYield) / 12);
-      const probability = Math.min(
-        Math.max(baseProbability * profile.probabilityScale, 0.05),
-        0.95
-      );
-
-      return {
-        ...profile,
-        annualYield,
-        monthlyRent,
-        probability,
-      };
-    });
+    return RENT_RATE_OFFSETS.flatMap((rateOffset) =>
+      LEASE_LENGTH_CHOICES.map((leaseMonths) => buildRentPlan(property, leaseMonths, rateOffset))
+    );
   }
 
   function initialiseManagementFinancingState() {
@@ -372,7 +481,7 @@ import {
     const rentDescription = activeTenant
       ? "Current rent"
       : rentOption
-        ? `${Math.round((rentOption.probability ?? 0) * 100)}% hit · ${rentOption.leaseMonths}-month lease`
+        ? `${Math.round((rentOption.probability ?? 0) * 100)}% monthly placement · ${rentOption.leaseMonths}-month lease · Base +${Math.round((rentOption.rateOffset ?? 0) * 100)}%`
         : "Target rent";
     const maintenancePercent = clampMaintenancePercent(property.maintenancePercent ?? 0);
     const maintenanceDescription = property.maintenanceWork
@@ -547,11 +656,15 @@ import {
         statusNotes.push(`maintenance below ${maintenanceThreshold}%`);
       }
       const statusSuffix = statusNotes.length > 0 ? ` (${statusNotes.join("; ")})` : "";
+      const rateLabel = rentOption
+        ? ` · Base +${Math.round((rentOption.rateOffset ?? 0) * 100)}%`
+        : "";
+      const leaseLabel = rentOption ? ` · ${rentOption.leaseMonths}-month lease` : "";
       statusList.innerHTML = `
         <li><strong>Status:</strong> Vacant${statusSuffix}</li>
         <li><strong>Target rent:</strong> ${formatCurrency(
           rentOption?.monthlyRent ?? 0
-        )} (${chance} monthly hit)</li>
+        )} (${chance} monthly placement${leaseLabel}${rateLabel})</li>
       `;
     }
     if (maintenanceRestricted && activeTenant) {
@@ -571,37 +684,93 @@ import {
     controlsCard.innerHTML = "<h6>Leasing controls</h6>";
 
     if (rentOption) {
+      const leaseGroup = document.createElement("div");
+      leaseGroup.className = "mb-3";
+      const leaseLabel = document.createElement("label");
+      leaseLabel.className = "form-label small fw-semibold";
+      leaseLabel.setAttribute("for", `management-lease-${property.id}`);
+      leaseLabel.textContent = activeTenant ? "Next lease length" : "Lease length";
+      const leaseSlider = document.createElement("input");
+      leaseSlider.type = "range";
+      leaseSlider.className = "form-range";
+      leaseSlider.min = "0";
+      leaseSlider.max = String(LEASE_LENGTH_CHOICES.length - 1);
+      leaseSlider.step = "1";
+      const leaseIndex = Math.max(LEASE_LENGTH_CHOICES.indexOf(rentOption.leaseMonths), 0);
+      leaseSlider.value = String(leaseIndex);
+      leaseSlider.id = `management-lease-${property.id}`;
+      const leaseValue = document.createElement("div");
+      leaseValue.className = "small text-muted";
+      leaseValue.textContent = `${rentOption.leaseMonths} months`;
+      leaseSlider.addEventListener("input", (event) => {
+        const index = Number.parseInt(event.target.value, 10);
+        const months = LEASE_LENGTH_CHOICES[index] ?? rentOption.leaseMonths;
+        leaseValue.textContent = `${months} months`;
+      });
+      leaseSlider.addEventListener("change", (event) => {
+        const index = Number.parseInt(event.target.value, 10);
+        const months = LEASE_LENGTH_CHOICES[index] ?? rentOption.leaseMonths;
+        handleRentOptionChange(
+          property.id,
+          { leaseMonths: months },
+          { scope }
+        );
+        refreshManagementContext({ closeIfMissing: false });
+      });
+      leaseGroup.append(leaseLabel, leaseSlider, leaseValue);
+
       const rentGroup = document.createElement("div");
       rentGroup.className = "mb-3";
       const rentLabel = document.createElement("label");
       rentLabel.className = "form-label small fw-semibold";
-      rentLabel.setAttribute("for", `management-rent-${property.id}`);
-      rentLabel.textContent = activeTenant ? "Next rent strategy" : "Rent strategy";
-      const rentSelect = document.createElement("select");
-      rentSelect.id = `management-rent-${property.id}`;
-      rentSelect.className = "form-select";
-      getRentStrategyOptions(property).forEach((option) => {
-        const optionElement = document.createElement("option");
-        optionElement.value = option.key;
-        const chance = Math.round((option.probability ?? 0) * 100);
-        optionElement.textContent = `${option.label} · ${formatCurrency(
-          option.monthlyRent
-        )} (${chance}% hit · ${option.leaseMonths}-mo lease)`;
-        rentSelect.append(optionElement);
+      rentLabel.setAttribute("for", `management-rate-${property.id}`);
+      rentLabel.textContent = activeTenant ? "Next rent premium" : "Rent premium";
+      const rentSlider = document.createElement("input");
+      rentSlider.type = "range";
+      rentSlider.className = "form-range";
+      rentSlider.min = "0";
+      rentSlider.max = String(RENT_RATE_OFFSETS.length - 1);
+      rentSlider.step = "1";
+      const rateIndex = Math.max(RENT_RATE_OFFSETS.indexOf(rentOption.rateOffset), 0);
+      rentSlider.value = String(rateIndex);
+      rentSlider.id = `management-rate-${property.id}`;
+      const rentValue = document.createElement("div");
+      rentValue.className = "small text-muted";
+      rentValue.textContent = `Base +${Math.round(rentOption.rateOffset * 100)}%`;
+      rentSlider.addEventListener("input", (event) => {
+        const index = Number.parseInt(event.target.value, 10);
+        const rate = RENT_RATE_OFFSETS[index] ?? rentOption.rateOffset;
+        rentValue.textContent = `Base +${Math.round(rate * 100)}%`;
       });
-      rentSelect.value = rentOption.key;
-      rentSelect.addEventListener("change", (event) => {
-        const optionKey = event.target.value;
-        handleRentOptionChange(property.id, optionKey, { scope });
+      rentSlider.addEventListener("change", (event) => {
+        const index = Number.parseInt(event.target.value, 10);
+        const rate = RENT_RATE_OFFSETS[index] ?? rentOption.rateOffset;
+        handleRentOptionChange(
+          property.id,
+          { rateOffset: rate },
+          { scope }
+        );
         refreshManagementContext({ closeIfMissing: false });
       });
+      rentGroup.append(rentLabel, rentSlider, rentValue);
+
+      const rentSummary = document.createElement("div");
+      rentSummary.className = "management-note";
+      const chance = Math.round((rentOption.probability ?? 0) * 100);
+      rentSummary.innerHTML = `
+        <strong>Monthly rent:</strong> ${formatCurrency(rentOption.monthlyRent)}<br />
+        <strong>Placement chance:</strong> ${chance}% per month<br />
+        <strong>Lease length:</strong> ${rentOption.leaseMonths} months<br />
+        <strong>Premium:</strong> Base +${Math.round((rentOption.rateOffset ?? 0) * 100)}%
+      `;
+
       const rentHelp = document.createElement("div");
       rentHelp.className = "form-text small";
       rentHelp.textContent = activeTenant
-        ? "Applies after the current lease ends."
-        : "Adjust to balance rent against vacancy risk.";
-      rentGroup.append(rentLabel, rentSelect, rentHelp);
-      controlsCard.append(rentGroup);
+        ? "Changes apply after the current lease ends."
+        : "Lower premiums improve placement. Longer leases help below base +5%, while shorter leases help above base +6%.";
+
+      controlsCard.append(leaseGroup, rentGroup, rentSummary, rentHelp);
     }
 
     const autoWrapper = document.createElement("div");
@@ -1211,24 +1380,14 @@ import {
   }
 
   function findRentStrategyOption(property, optionKey) {
-    const options = getRentStrategyOptions(property);
-    if (options.length === 0) {
+    if (!property) {
       return null;
     }
 
-    if (optionKey) {
-      const match = options.find((option) => option.key === optionKey);
-      if (match) {
-        return match;
-      }
-    }
-
-    const marketOption = options.find((option) => option.key === "market");
-    if (marketOption) {
-      return marketOption;
-    }
-
-    return options[0];
+    const overrides =
+      typeof optionKey === "string" ? parseRentPlanKey(optionKey) ?? {} : {};
+    const settings = resolveRentSettings(property, overrides);
+    return buildRentPlan(property, settings.leaseMonths, settings.rateOffset);
   }
 
   function ensurePropertyRentSettings(property) {
@@ -1236,13 +1395,18 @@ import {
       return null;
     }
 
-    const selectedOption = findRentStrategyOption(property, property.askingRentOption);
-    if (!selectedOption) {
+    const rentPlan = findRentStrategyOption(property, property.askingRentOption);
+    if (!rentPlan) {
       return null;
     }
 
-    property.askingRentOption = selectedOption.key;
-    property.desiredMonthlyRent = selectedOption.monthlyRent;
+    property.rentSettings = {
+      leaseMonths: rentPlan.leaseMonths,
+      rateOffset: rentPlan.rateOffset,
+    };
+    property.askingRentOption = rentPlan.key;
+    property.desiredMonthlyRent = rentPlan.monthlyRent;
+    property.annualYield = rentPlan.annualRate;
 
     if (typeof property.autoRelist !== "boolean") {
       property.autoRelist = true;
@@ -1260,17 +1424,19 @@ import {
       }
     } else {
       property.tenant.leaseMonthsRemaining =
-        property.tenant.leaseMonthsRemaining ?? property.leaseMonthsRemaining ?? selectedOption.leaseMonths;
+        property.tenant.leaseMonthsRemaining ??
+        property.leaseMonthsRemaining ??
+        rentPlan.leaseMonths;
       property.tenant.leaseLengthMonths =
         property.tenant.leaseLengthMonths ?? property.tenant.leaseMonthsRemaining;
-      property.tenant.optionKey = property.tenant.optionKey ?? selectedOption.key;
-      property.monthlyRent = property.tenant.rent ?? selectedOption.monthlyRent;
+      property.tenant.optionKey = property.tenant.optionKey ?? rentPlan.key;
+      property.monthlyRent = property.tenant.rent ?? rentPlan.monthlyRent;
       property.leaseMonthsRemaining = property.tenant.leaseMonthsRemaining;
       property.rentalMarketingActive = false;
       property.vacancyMonths = 0;
     }
 
-    return selectedOption;
+    return rentPlan;
   }
 
   function startRentalMarketing(property) {
@@ -1596,15 +1762,17 @@ import {
       getInitialMaintenancePercent()
     );
     const cost = calculateMaintenanceAdjustedValue(baseValue, maintenancePercent);
-    const annualYield = mapDemandToAnnualYield(baseProperty.demandScore);
-    const rentOptions = getRentStrategyOptions({
-      ...baseProperty,
-      baseValue,
-      cost,
-      maintenancePercent,
-    });
-    const defaultOption = rentOptions.find((option) => option.key === "market") ?? rentOptions[0];
-    const estimatedYield = defaultOption?.annualYield ?? annualYield;
+    const defaultPlan = buildRentPlan(
+      {
+        ...baseProperty,
+        baseValue,
+        cost,
+        maintenancePercent,
+      },
+      resolveLeaseMonths(12),
+      resolveRateOffset(0.05)
+    );
+    const estimatedYield = defaultPlan?.annualRate ?? mapDemandToAnnualYield(baseProperty.demandScore);
     const inheritedChance = 0.25 + (clampDemandScore(baseProperty.demandScore) / 10) * 0.35;
     const hasInheritedTenant = Math.random() < Math.min(Math.max(inheritedChance, 0), 0.75);
 
@@ -1612,17 +1780,17 @@ import {
     let leaseMonthsRemaining = 0;
     let monthlyRent = 0;
 
-    if (hasInheritedTenant && defaultOption) {
-      const minLease = Math.max(defaultOption.leaseMonths - 3, 6);
-      const maxLease = defaultOption.leaseMonths + 6;
+    if (hasInheritedTenant && defaultPlan) {
+      const minLease = Math.max(defaultPlan.leaseMonths - 3, 6);
+      const maxLease = defaultPlan.leaseMonths + 6;
       const leaseMonths = getRandomInt(minLease, maxLease);
       tenant = {
-        rent: defaultOption.monthlyRent,
+        rent: defaultPlan.monthlyRent,
         leaseMonthsRemaining: leaseMonths,
         leaseLengthMonths: leaseMonths,
         startedOnDay: Math.max(state.day - getRandomInt(0, Math.min(leaseMonths - 1, 6)), 1),
         inherited: true,
-        optionKey: defaultOption.key,
+        optionKey: defaultPlan.key,
       };
       leaseMonthsRemaining = leaseMonths;
       monthlyRent = tenant.rent;
@@ -1637,8 +1805,9 @@ import {
       monthlyRent,
       tenant,
       leaseMonthsRemaining,
-      desiredMonthlyRent: defaultOption?.monthlyRent ?? Math.round((cost * annualYield) / 12),
-      askingRentOption: defaultOption?.key ?? null,
+      desiredMonthlyRent:
+        defaultPlan?.monthlyRent ?? Math.round((cost * (estimatedYield ?? 0.05)) / 12),
+      askingRentOption: defaultPlan?.key ?? null,
       autoRelist: true,
       rentalMarketingActive: !tenant,
       vacancyMonths: tenant ? 0 : getRandomInt(0, 2),
@@ -2230,15 +2399,17 @@ import {
         property.maintenancePercent
       );
       const cost = calculateMaintenanceAdjustedValue(baseValue, maintenancePercent);
-      const annualYield = mapDemandToAnnualYield(property.demandScore);
-      const rentOptions = getRentStrategyOptions({
-        ...property,
-        baseValue,
-        maintenancePercent,
-        cost,
-      });
-      const defaultOption = rentOptions.find((option) => option.key === "market") ?? rentOptions[0];
-      const estimatedYield = defaultOption?.annualYield ?? annualYield;
+      const defaultPlan = buildRentPlan(
+        {
+          ...property,
+          baseValue,
+          maintenancePercent,
+          cost,
+        },
+        resolveLeaseMonths(12),
+        resolveRateOffset(0.05)
+      );
+      const estimatedYield = defaultPlan?.annualRate ?? mapDemandToAnnualYield(property.demandScore);
       const inheritedChance = 0.25 + (clampDemandScore(property.demandScore) / 10) * 0.35;
       const hasTenant = Math.random() < Math.min(Math.max(inheritedChance, 0), 0.75);
 
@@ -2246,17 +2417,17 @@ import {
       let leaseMonthsRemaining = 0;
       let monthlyRent = 0;
 
-      if (hasTenant && defaultOption) {
-        const minLease = Math.max(defaultOption.leaseMonths - 3, 6);
-        const maxLease = defaultOption.leaseMonths + 6;
+      if (hasTenant && defaultPlan) {
+        const minLease = Math.max(defaultPlan.leaseMonths - 3, 6);
+        const maxLease = defaultPlan.leaseMonths + 6;
         const leaseMonths = getRandomInt(minLease, maxLease);
         tenant = {
-          rent: defaultOption.monthlyRent,
+          rent: defaultPlan.monthlyRent,
           leaseMonthsRemaining: leaseMonths,
           leaseLengthMonths: leaseMonths,
           startedOnDay: state.day,
           inherited: true,
-          optionKey: defaultOption.key,
+          optionKey: defaultPlan.key,
         };
         leaseMonthsRemaining = leaseMonths;
         monthlyRent = tenant.rent;
@@ -2271,8 +2442,9 @@ import {
         monthlyRent,
         tenant,
         leaseMonthsRemaining,
-        desiredMonthlyRent: defaultOption?.monthlyRent ?? Math.round((cost * annualYield) / 12),
-        askingRentOption: defaultOption?.key ?? null,
+        desiredMonthlyRent:
+          defaultPlan?.monthlyRent ?? Math.round((cost * (estimatedYield ?? 0.05)) / 12),
+        askingRentOption: defaultPlan?.key ?? null,
         autoRelist: true,
         rentalMarketingActive: !tenant,
         vacancyMonths: tenant ? 0 : getRandomInt(0, 1),
@@ -2468,7 +2640,7 @@ import {
                 `(${leaseLabel} lease)`,
               ];
               if (chanceLabel) {
-                messageParts.push(`after ${chanceLabel} monthly hit chance.`);
+                messageParts.push(`after ${chanceLabel} monthly placement chance.`);
               }
               const summary = messageParts.join(" ");
               addHistoryEntry(chanceLabel ? summary : `${summary}.`);
@@ -2741,7 +2913,7 @@ import {
 
   function handleRentOptionChange(
     propertyId,
-    optionKey,
+    settings,
     { scope, updateUI: shouldUpdateUI = true } = {}
   ) {
     const collection = scope === "portfolio" ? state.portfolio : state.market;
@@ -2750,11 +2922,22 @@ import {
       return null;
     }
 
-    const option = findRentStrategyOption(property, optionKey);
+    const overrides =
+      typeof settings === "string" ? parseRentPlanKey(settings) ?? {} : settings ?? {};
+    const currentPlan = ensurePropertyRentSettings(property);
+    const leaseMonths = resolveLeaseMonths(
+      overrides.leaseMonths ?? currentPlan?.leaseMonths
+    );
+    const rateOffset = resolveRateOffset(overrides.rateOffset ?? currentPlan?.rateOffset);
+    const option = buildRentPlan(property, leaseMonths, rateOffset);
     if (!option) {
       return null;
     }
 
+    property.rentSettings = {
+      leaseMonths: option.leaseMonths,
+      rateOffset: option.rateOffset,
+    };
     property.askingRentOption = option.key;
     property.desiredMonthlyRent = option.monthlyRent;
     ensurePropertyRentSettings(property);
@@ -2763,10 +2946,14 @@ import {
     }
 
     if (scope === "portfolio") {
+      const chance = Math.round((option.probability ?? 0) * 100);
+      const rateLabel = `base +${Math.round(option.rateOffset * 100)}%`;
+      const leaseLabel = `${option.leaseMonths}-month lease`;
+      const timingNote = hasActiveTenant(property)
+        ? " (applies after current lease)."
+        : ".";
       addHistoryEntry(
-        `Updated rent strategy for ${property.name}: ${option.label} at ${formatCurrency(
-          option.monthlyRent
-        )} (${Math.round((option.probability ?? 0) * 100)}% monthly hit).`
+        `Updated rent plan for ${property.name}: ${formatCurrency(option.monthlyRent)} (${rateLabel}, ${leaseLabel}, ${chance}% monthly placement)${timingNote}`
       );
     }
 
@@ -2794,7 +2981,9 @@ import {
           addHistoryEntry(
             `Auto-relisting enabled for ${property.name}: targeting ${formatCurrency(
               option?.monthlyRent ?? 0
-            )} (${Math.round((option?.probability ?? 0) * 100)}% monthly hit).`
+            )} (${Math.round((option?.probability ?? 0) * 100)}% monthly placement · ${
+              option?.leaseMonths ?? 0
+            }-month lease · base +${Math.round((option?.rateOffset ?? 0) * 100)}%).`
           );
         } else {
           const maintenancePercent = clampMaintenancePercent(property.maintenancePercent ?? 0);
@@ -2827,7 +3016,7 @@ import {
         addHistoryEntry(
           `Listed ${property.name} for rent at ${formatCurrency(option?.monthlyRent ?? 0)} (${Math.round(
             (option?.probability ?? 0) * 100
-          )}% monthly hit).`
+          )}% monthly placement · ${option?.leaseMonths ?? 0}-month lease · base +${Math.round((option?.rateOffset ?? 0) * 100)}%).`
         );
       } else {
         const maintenancePercent = clampMaintenancePercent(property.maintenancePercent ?? 0);
@@ -3192,9 +3381,12 @@ import {
           ? `${Math.round((rentOption.probability ?? 0) * 100)}%`
           : "-";
         const leaseMonths = rentOption?.leaseMonths ?? 0;
+        const rateLabel = rentOption
+          ? ` · Base +${Math.round((rentOption.rateOffset ?? 0) * 100)}%`
+          : "";
         rent.innerHTML = `<strong>Target rent:</strong> ${formatCurrency(
           rentOption?.monthlyRent ?? 0
-        )} <span class="text-muted">(${chance} monthly hit · ${leaseMonths}-month lease)</span>`;
+        )} <span class="text-muted">(${chance} monthly placement · ${leaseMonths}-month lease${rateLabel})</span>`;
       }
 
       const statusWrapper = document.createElement("div");
@@ -3518,7 +3710,9 @@ import {
           )} remaining)`
         : `${formatCurrency(rentAmount)} target (${Math.round(
             (rentOption?.probability ?? 0) * 100
-          )}% monthly hit)`;
+          )}% monthly placement · ${rentOption?.leaseMonths ?? 0}-month lease · base +${Math.round(
+            (rentOption?.rateOffset ?? 0) * 100
+          )}%)`;
       elements.financePropertySummary.textContent = `Price ${formatCurrency(
         property.cost
       )} · Rent ${rentSummary}`;
@@ -3630,7 +3824,10 @@ import {
           ? `${Math.round((option.probability ?? 0) * 100)}%`
           : "-";
         const leaseMonths = option?.leaseMonths ?? 0;
-        return ` · ${chance} monthly hit · ${leaseMonths}-month lease`;
+        const rateLabel = option
+          ? ` · Base +${Math.round((option.rateOffset ?? 0) * 100)}%`
+          : "";
+        return ` · ${chance} monthly placement · ${leaseMonths}-month lease${rateLabel}`;
       };
       let portfolioRentValueNode = null;
       let portfolioRentMetaNode = null;
