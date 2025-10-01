@@ -1285,6 +1285,7 @@ import {
     }
     property.rentalMarketingActive = true;
     property.vacancyMonths = 0;
+    property.rentalMarketingPausedForMaintenance = false;
     return true;
   }
 
@@ -1294,6 +1295,7 @@ import {
     }
     property.rentalMarketingActive = false;
     property.vacancyMonths = 0;
+    property.rentalMarketingPausedForMaintenance = false;
   }
 
   function createStatusChip(text, className = "bg-secondary") {
@@ -1366,6 +1368,7 @@ import {
       if (property.rentalMarketingActive) {
         property.rentalMarketingActive = false;
         property.vacancyMonths = 0;
+        property.rentalMarketingPausedForMaintenance = true;
         events.push({
           type: "marketingPausedMaintenance",
           property,
@@ -1377,9 +1380,10 @@ import {
     }
 
     if (!property.rentalMarketingActive) {
-      if (property.autoRelist) {
+      if (property.autoRelist && property.rentalMarketingPausedForMaintenance) {
         property.rentalMarketingActive = true;
         property.vacancyMonths = 0;
+        property.rentalMarketingPausedForMaintenance = false;
         events.push({
           type: "marketingResumedMaintenance",
           property,
@@ -2855,6 +2859,8 @@ import {
     };
 
     ensurePropertyRentSettings(purchased);
+
+    purchased.rentalMarketingPausedForMaintenance = false;
 
     if (purchased.tenant) {
       purchased.tenant.inherited = true;
