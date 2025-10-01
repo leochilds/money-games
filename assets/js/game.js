@@ -1377,7 +1377,18 @@ import {
     }
 
     if (!property.rentalMarketingActive) {
-      return rentCollected;
+      if (property.autoRelist) {
+        property.rentalMarketingActive = true;
+        property.vacancyMonths = 0;
+        events.push({
+          type: "marketingResumedMaintenance",
+          property,
+          maintenancePercent: clampMaintenancePercent(property.maintenancePercent ?? 0),
+          threshold: maintenanceThreshold,
+        });
+      } else {
+        return rentCollected;
+      }
     }
 
     property.vacancyMonths = (property.vacancyMonths ?? 0) + 1;
@@ -2473,6 +2484,13 @@ import {
               const maintenanceLabel = `${(event.maintenancePercent ?? 0).toFixed(1)}%`;
               addHistoryEntry(
                 `Paused advertising for ${event.property.name}: maintenance at ${maintenanceLabel} is below the required ${event.threshold}%.`
+              );
+              break;
+            }
+            case "marketingResumedMaintenance": {
+              const maintenanceLabel = `${(event.maintenancePercent ?? 0).toFixed(1)}%`;
+              addHistoryEntry(
+                `Resumed advertising for ${event.property.name}: maintenance improved to ${maintenanceLabel}, clearing the ${event.threshold}%.`
               );
               break;
             }
