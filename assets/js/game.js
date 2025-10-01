@@ -66,7 +66,8 @@ import {
     if (!Number.isFinite(value)) {
       return 0;
     }
-    return Math.min(Math.max(Math.round(value), 0), 100);
+    const clamped = Math.min(Math.max(value, 0), 100);
+    return Math.round(clamped * 10) / 10;
   }
 
   function calculateMaintenanceAdjustedValue(baseValue, maintenancePercent) {

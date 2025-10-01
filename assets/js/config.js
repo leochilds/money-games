@@ -87,8 +87,8 @@ export const propertyTypeMultipliers = {
 
 export const MAINTENANCE_CONFIG = {
   initialPercentRange: [25, 75],
-  occupiedDecayPerMonth: 4,
-  unoccupiedDecayPerMonth: 2,
+  occupiedDecayPerMonth: 1,
+  unoccupiedDecayPerMonth: 0.2,
   refurbishmentCostRatio: 0.25,
   criticalThreshold: 25,
 };
