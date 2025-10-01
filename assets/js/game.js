@@ -1281,6 +1281,13 @@ import {
     if (!canAdvertiseForRent(property)) {
       property.rentalMarketingActive = false;
       property.vacancyMonths = 0;
+      if (
+        property.autoRelist &&
+        !isPropertyVacant(property) &&
+        isMaintenanceBelowRentalThreshold(property)
+      ) {
+        property.rentalMarketingPausedForMaintenance = true;
+      }
       return false;
     }
     property.rentalMarketingActive = true;
@@ -2872,7 +2879,8 @@ import {
       if (purchased.autoRelist) {
         const started = startRentalMarketing(purchased);
         if (!started) {
-          stopRentalMarketing(purchased);
+          purchased.rentalMarketingActive = false;
+          purchased.vacancyMonths = 0;
         }
       } else {
         stopRentalMarketing(purchased);
