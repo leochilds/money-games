@@ -222,6 +222,957 @@ import {
     });
   }
 
+  function initialiseManagementFinancingState() {
+    Object.assign(managementState.financing, {
+      depositRatio: FINANCE_CONFIG.defaultDepositRatio,
+      termYears: FINANCE_CONFIG.defaultTermYears,
+      fixedPeriodYears: FINANCE_CONFIG.defaultFixedPeriodYears,
+      interestOnly: false,
+      rateProfile: null,
+      previewMortgage: null,
+      canAffordDeposit: false,
+    });
+  }
+
+  function setManagementSection(sectionKey) {
+    const sections = elements.managementSections ?? {};
+    const availableSections = Object.keys(sections);
+    const resolvedSection = availableSections.includes(sectionKey)
+      ? sectionKey
+      : availableSections[0] ?? "overview";
+    managementState.activeSection = resolvedSection;
+
+    if (elements.managementSectionNav) {
+      const navButtons = elements.managementSectionNav.querySelectorAll(
+        ".management-nav-link"
+      );
+      navButtons.forEach((button) => {
+        const isActive = button.dataset.section === resolvedSection;
+        button.classList.toggle("active", isActive);
+        button.setAttribute("aria-selected", isActive ? "true" : "false");
+      });
+    }
+
+    availableSections.forEach((key) => {
+      const panel = sections[key];
+      if (panel) {
+        panel.classList.toggle("active", key === resolvedSection);
+      }
+    });
+  }
+
+  function resolveManagedProperty() {
+    const { propertyId } = managementState;
+    if (!propertyId) {
+      return { property: null, scope: managementState.scope };
+    }
+
+    const priorityScopes = managementState.scope === "portfolio"
+      ? ["portfolio", "market"]
+      : managementState.scope === "market"
+        ? ["market", "portfolio"]
+        : ["portfolio", "market"];
+
+    for (const scope of priorityScopes) {
+      const collection = scope === "portfolio" ? state.portfolio : state.market;
+      const match = collection.find((item) => item.id === propertyId);
+      if (match) {
+        managementState.scope = scope;
+        return { property: match, scope };
+      }
+    }
+
+    return { property: null, scope: null };
+  }
+
+  function makeManagementTag(label, className = "badge bg-secondary") {
+    const tag = document.createElement("span");
+    tag.className = `badge rounded-pill ${className}`;
+    tag.textContent = label;
+    return tag;
+  }
+
+  function createManagementStatCard(title, value, description = "") {
+    const card = document.createElement("div");
+    card.className = "stat-card";
+    const heading = document.createElement("h6");
+    heading.textContent = title;
+    const valueNode = document.createElement("strong");
+    valueNode.textContent = value;
+    card.append(heading, valueNode);
+    if (description) {
+      const descriptionNode = document.createElement("div");
+      descriptionNode.className = "small text-muted";
+      descriptionNode.textContent = description;
+      card.append(descriptionNode);
+    }
+    return card;
+  }
+
+  function renderManagementSummary(property, scope) {
+    if (!elements.managementModalSummary) {
+      return;
+    }
+
+    elements.managementModalSummary.innerHTML = "";
+
+    const tagContainer = document.createElement("div");
+    tagContainer.className = "management-tags";
+
+    const scopeLabel = scope === "portfolio" ? "Owned asset" : "Market listing";
+    const scopeClass = scope === "portfolio" ? "bg-success" : "bg-info text-dark";
+    tagContainer.append(makeManagementTag(scopeLabel, scopeClass));
+
+    if (hasActiveTenant(property)) {
+      tagContainer.append(makeManagementTag("Occupied", "bg-success"));
+    } else {
+      tagContainer.append(makeManagementTag("Vacant", "bg-secondary"));
+    }
+
+    if (property.rentalMarketingActive) {
+      tagContainer.append(makeManagementTag("Advertising", "bg-warning text-dark"));
+    }
+
+    if (property.mortgage) {
+      tagContainer.append(makeManagementTag("Financed", "bg-primary"));
+      if (property.mortgage.variableRateActive) {
+        tagContainer.append(makeManagementTag("Variable rate", "bg-warning text-dark"));
+      }
+    }
+
+    const rentOption = findRentStrategyOption(property, property.askingRentOption);
+    const activeTenant = hasActiveTenant(property);
+    const rentLabel = activeTenant
+      ? formatCurrency(property.tenant?.rent ?? 0)
+      : formatCurrency(rentOption?.monthlyRent ?? 0);
+    const rentDescription = activeTenant
+      ? "Current rent"
+      : rentOption
+        ? `${Math.round((rentOption.probability ?? 0) * 100)}% hit · ${rentOption.leaseMonths}-month lease`
+        : "Target rent";
+    const maintenancePercent = clampMaintenancePercent(property.maintenancePercent ?? 0);
+    const maintenanceDescription = property.maintenanceWork
+      ? "Maintenance scheduled"
+      : "Condition rating";
+
+    const statsContainer = document.createElement("div");
+    statsContainer.className = "management-summary-stats";
+    statsContainer.append(
+      createManagementStatCard("Value", formatCurrency(property.cost), "Maintenance-adjusted price"),
+      createManagementStatCard("Rent", rentLabel, rentDescription),
+      createManagementStatCard("Maintenance", `${maintenancePercent}%`, maintenanceDescription)
+    );
+
+    if (scope === "portfolio") {
+      const netCash = calculateNetCashForProperty(property);
+      const netDescription = netCash >= 0 ? "Positive cash flow" : "Negative cash flow";
+      statsContainer.append(
+        createManagementStatCard("Net / month", formatCurrency(netCash), netDescription)
+      );
+    } else {
+      const demandScore = property.demandScore ?? "-";
+      statsContainer.append(
+        createManagementStatCard("Demand", `${demandScore}/10`, "Local interest level")
+      );
+    }
+
+    elements.managementModalSummary.append(tagContainer, statsContainer);
+
+    if (elements.managementModalLabel) {
+      elements.managementModalLabel.textContent = property.name;
+    }
+
+    if (elements.managementModalSubtitle) {
+      const summaryParts = [
+        `${property.bedrooms} bed`,
+        `${property.bathrooms} bath`,
+        formatPropertyType(property.propertyType),
+      ];
+      if (property.locationDescriptor) {
+        summaryParts.push(property.locationDescriptor);
+      }
+      elements.managementModalSubtitle.textContent = summaryParts.filter(Boolean).join(" · ");
+    }
+  }
+
+  function renderManagementOverviewSection(property, scope) {
+    if (!elements.managementOverview) {
+      return;
+    }
+    elements.managementOverview.innerHTML = "";
+
+    const basicsCard = document.createElement("div");
+    basicsCard.className = "section-card";
+    basicsCard.innerHTML = "<h6>Property details</h6>";
+
+    const detailsList = document.createElement("ul");
+    detailsList.className = "list-unstyled small mb-0";
+    const location = property.location ?? {};
+    const proximityPercent = ((location.proximity ?? 0) * 100).toFixed(0);
+    const schoolRating = location.schoolRating ?? "-";
+    const crimeScore = location.crimeScore ?? "-";
+
+    const detailItems = [
+      `<strong>Type:</strong> ${formatPropertyType(property.propertyType)}`,
+      `<strong>Bedrooms:</strong> ${property.bedrooms}`,
+      `<strong>Bathrooms:</strong> ${property.bathrooms}`,
+      property.locationDescriptor
+        ? `<strong>Neighborhood:</strong> ${property.locationDescriptor}`
+        : null,
+      `<strong>Transit access:</strong> ${proximityPercent}%`,
+      `<strong>Schools:</strong> ${schoolRating}/10`,
+      `<strong>Crime score:</strong> ${crimeScore}/10`,
+    ].filter(Boolean);
+
+    detailItems.forEach((item) => {
+      const li = document.createElement("li");
+      li.innerHTML = item;
+      detailsList.append(li);
+    });
+
+    if ((property.features ?? []).length > 0) {
+      const featuresRow = document.createElement("li");
+      featuresRow.innerHTML = "<strong>Features:</strong>";
+      const featureList = document.createElement("div");
+      featureList.className = "d-flex flex-wrap gap-2 mt-1";
+      property.features.forEach((feature) => {
+        featureList.append(makeManagementTag(feature, "bg-light text-dark border"));
+      });
+      featuresRow.append(featureList);
+      detailsList.append(featuresRow);
+    }
+
+    if (property.description) {
+      const descriptionItem = document.createElement("li");
+      descriptionItem.innerHTML = `<strong>Description:</strong> ${property.description}`;
+      detailsList.append(descriptionItem);
+    }
+
+    basicsCard.append(detailsList);
+
+    const performanceCard = document.createElement("div");
+    performanceCard.className = "section-card";
+    performanceCard.innerHTML = "<h6>Performance snapshot</h6>";
+
+    const performanceList = document.createElement("ul");
+    performanceList.className = "list-unstyled small mb-0";
+
+    const vacancyMonths = property.vacancyMonths ?? 0;
+    const marketingStatus = property.rentalMarketingActive ? "Active advertising" : "Not advertising";
+    const demandScore = property.demandScore ?? "-";
+    const annualYieldPercent = Number.isFinite(property.annualYield)
+      ? `${(property.annualYield * 100).toFixed(1)}%`
+      : "-";
+
+    const performanceItems = [
+      `<strong>Demand:</strong> ${demandScore}/10`,
+      `<strong>Estimated yield:</strong> ${annualYieldPercent}`,
+      `<strong>Vacancy months:</strong> ${vacancyMonths}`,
+      `<strong>Marketing:</strong> ${marketingStatus}`,
+    ];
+
+    if (scope === "market" && Number.isFinite(property.marketAge)) {
+      performanceItems.push(`<strong>Days on market:</strong> ${property.marketAge}`);
+    }
+
+    performanceItems.forEach((item) => {
+      const li = document.createElement("li");
+      li.innerHTML = item;
+      performanceList.append(li);
+    });
+
+    performanceCard.append(performanceList);
+
+    elements.managementOverview.append(basicsCard, performanceCard);
+  }
+
+  function renderManagementLeasingSection(property, scope) {
+    if (!elements.managementLeasing) {
+      return;
+    }
+    elements.managementLeasing.innerHTML = "";
+
+    const statusCard = document.createElement("div");
+    statusCard.className = "section-card";
+    statusCard.innerHTML = "<h6>Leasing status</h6>";
+
+    const statusList = document.createElement("ul");
+    statusList.className = "list-unstyled small mb-0";
+    const activeTenant = hasActiveTenant(property);
+    const rentOption = findRentStrategyOption(property, property.askingRentOption);
+    const maintenanceVacant = isPropertyVacant(property);
+
+    if (activeTenant) {
+      statusList.innerHTML = `
+        <li><strong>Status:</strong> Occupied (${formatLeaseCountdown(
+          property.leaseMonthsRemaining
+        )} remaining)</li>
+        <li><strong>Rent:</strong> ${formatCurrency(property.tenant?.rent ?? 0)}</li>
+      `;
+    } else {
+      const chance = rentOption
+        ? `${Math.round((rentOption.probability ?? 0) * 100)}%`
+        : "-";
+      statusList.innerHTML = `
+        <li><strong>Status:</strong> Vacant${
+          maintenanceVacant ? " (maintenance in progress)" : ""
+        }</li>
+        <li><strong>Target rent:</strong> ${formatCurrency(
+          rentOption?.monthlyRent ?? 0
+        )} (${chance} monthly hit)</li>
+      `;
+    }
+    statusList.innerHTML += `<li><strong>Auto-relist:</strong> ${
+      property.autoRelist ? "Enabled" : "Disabled"
+    }</li>`;
+    statusList.innerHTML += `<li><strong>Marketing:</strong> ${
+      property.rentalMarketingActive ? "Advertising" : "Idle"
+    }</li>`;
+
+    statusCard.append(statusList);
+
+    const controlsCard = document.createElement("div");
+    controlsCard.className = "section-card";
+    controlsCard.innerHTML = "<h6>Leasing controls</h6>";
+
+    if (rentOption) {
+      const rentGroup = document.createElement("div");
+      rentGroup.className = "mb-3";
+      const rentLabel = document.createElement("label");
+      rentLabel.className = "form-label small fw-semibold";
+      rentLabel.setAttribute("for", `management-rent-${property.id}`);
+      rentLabel.textContent = activeTenant ? "Next rent strategy" : "Rent strategy";
+      const rentSelect = document.createElement("select");
+      rentSelect.id = `management-rent-${property.id}`;
+      rentSelect.className = "form-select";
+      getRentStrategyOptions(property).forEach((option) => {
+        const optionElement = document.createElement("option");
+        optionElement.value = option.key;
+        const chance = Math.round((option.probability ?? 0) * 100);
+        optionElement.textContent = `${option.label} · ${formatCurrency(
+          option.monthlyRent
+        )} (${chance}% hit · ${option.leaseMonths}-mo lease)`;
+        rentSelect.append(optionElement);
+      });
+      rentSelect.value = rentOption.key;
+      rentSelect.addEventListener("change", (event) => {
+        const optionKey = event.target.value;
+        handleRentOptionChange(property.id, optionKey, { scope });
+        refreshManagementContext({ closeIfMissing: false });
+      });
+      const rentHelp = document.createElement("div");
+      rentHelp.className = "form-text small";
+      rentHelp.textContent = activeTenant
+        ? "Applies after the current lease ends."
+        : "Adjust to balance rent against vacancy risk.";
+      rentGroup.append(rentLabel, rentSelect, rentHelp);
+      controlsCard.append(rentGroup);
+    }
+
+    const autoWrapper = document.createElement("div");
+    autoWrapper.className = "form-check form-switch mb-3";
+    const autoInput = document.createElement("input");
+    autoInput.type = "checkbox";
+    autoInput.className = "form-check-input";
+    autoInput.id = `management-autorelist-${property.id}`;
+    autoInput.checked = Boolean(property.autoRelist);
+    autoInput.addEventListener("change", (event) => {
+      handleAutoRelistToggle(property.id, event.target.checked, { scope });
+      refreshManagementContext({ closeIfMissing: false });
+    });
+    const autoLabel = document.createElement("label");
+    autoLabel.className = "form-check-label small";
+    autoLabel.setAttribute("for", autoInput.id);
+    autoLabel.textContent = "Auto-relist when vacant";
+    autoWrapper.append(autoInput, autoLabel);
+    controlsCard.append(autoWrapper);
+
+    if (scope === "portfolio" && !activeTenant) {
+      const marketingButton = document.createElement("button");
+      marketingButton.type = "button";
+      marketingButton.className = "btn btn-outline-primary";
+      marketingButton.textContent = property.rentalMarketingActive
+        ? "Pause advertising"
+        : "List for rent";
+      marketingButton.disabled = maintenanceVacant;
+      marketingButton.addEventListener("click", () => {
+        handleMarketingToggle(property.id, !property.rentalMarketingActive);
+        refreshManagementContext({ closeIfMissing: false });
+      });
+      controlsCard.append(marketingButton);
+      if (maintenanceVacant) {
+        const note = document.createElement("div");
+        note.className = "management-note mt-2";
+        note.textContent = "Advertising resumes once maintenance is complete.";
+        controlsCard.append(note);
+      }
+    }
+
+    elements.managementLeasing.append(statusCard, controlsCard);
+  }
+
+  function renderManagementFinancingSection(property, scope) {
+    if (!elements.managementFinancing) {
+      return;
+    }
+    elements.managementFinancing.innerHTML = "";
+
+    if (scope === "portfolio") {
+      const card = document.createElement("div");
+      card.className = "section-card";
+      card.innerHTML = "<h6>Mortgage status</h6>";
+      if (property.mortgage) {
+        const breakdown = getMortgagePaymentBreakdown(property.mortgage);
+        const lines = document.createElement("ul");
+        lines.className = "list-unstyled small mb-0";
+        lines.innerHTML = `
+          <li><strong>Payment:</strong> ${formatCurrency(breakdown.monthlyPayment)} / month</li>
+          <li><strong>Remaining term:</strong> ${formatLeaseCountdown(
+            property.mortgage.remainingTermMonths / 12
+          )}</li>
+          <li><strong>Principal remaining:</strong> ${formatCurrency(
+            breakdown.principalRemaining ?? property.mortgage.remainingBalance ?? 0
+          )}</li>
+        `;
+        if (breakdown.variablePhase?.isActive) {
+          lines.innerHTML += `<li><strong>Variable rate:</strong> ${(breakdown.variablePhase.reversionRate * 100).toFixed(2)}%</li>`;
+        }
+        card.append(lines);
+      } else {
+        const emptyState = document.createElement("div");
+        emptyState.className = "management-empty-state";
+        emptyState.textContent = "This property is owned outright with no active mortgage.";
+        card.append(emptyState);
+      }
+      elements.managementFinancing.append(card);
+      return;
+    }
+
+    managementState.financing.fixedPeriodYears = resolveFixedPeriodSelection(
+      managementState.financing.termYears,
+      managementState.financing.fixedPeriodYears
+    );
+
+    const rentOption = findRentStrategyOption(property, property.askingRentOption);
+    const projectedRent = hasActiveTenant(property)
+      ? property.tenant?.rent ?? 0
+      : rentOption?.monthlyRent ?? 0;
+
+    const rateProfile = deriveMortgageRateProfile({
+      depositRatio: managementState.financing.depositRatio,
+      termYears: managementState.financing.termYears,
+      fixedPeriodYears: managementState.financing.fixedPeriodYears,
+    });
+    managementState.financing.rateProfile = rateProfile;
+
+    const mortgage = createMortgageForCost(property.cost, {
+      depositRatio: managementState.financing.depositRatio,
+      termYears: managementState.financing.termYears,
+      fixedPeriodYears: managementState.financing.fixedPeriodYears,
+      interestOnly: managementState.financing.interestOnly,
+      rateProfile,
+    });
+    managementState.financing.previewMortgage = mortgage;
+    managementState.financing.canAffordDeposit = state.balance >= mortgage.deposit;
+
+    const controlsCard = document.createElement("div");
+    controlsCard.className = "section-card";
+    controlsCard.innerHTML = "<h6>Financing controls</h6>";
+
+    const depositGroup = document.createElement("div");
+    depositGroup.className = "mb-3";
+    const depositLabel = document.createElement("div");
+    depositLabel.className = "small fw-semibold mb-2";
+    depositLabel.textContent = "Deposit";
+    const depositOptions = document.createElement("div");
+    depositOptions.className = "management-finance-options";
+    depositOptions.innerHTML = (FINANCE_CONFIG.depositOptions ?? [])
+      .map((ratio) => {
+        const isActive = Math.abs(ratio - managementState.financing.depositRatio) < 1e-6;
+        return `
+          <button type="button" class="btn btn-outline-secondary${
+            isActive ? " active" : ""
+          }" data-deposit-ratio="${ratio}" aria-pressed="${isActive}">
+            ${formatPercentage(ratio)}
+          </button>
+        `;
+      })
+      .join("");
+    depositOptions.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-deposit-ratio]");
+      if (!button) {
+        return;
+      }
+      const ratio = Number.parseFloat(button.dataset.depositRatio);
+      if (!Number.isFinite(ratio)) {
+        return;
+      }
+      managementState.financing.depositRatio = ratio;
+      refreshManagementContext({ closeIfMissing: false });
+    });
+    depositGroup.append(depositLabel, depositOptions);
+    controlsCard.append(depositGroup);
+
+    const termGroup = document.createElement("div");
+    termGroup.className = "mb-3";
+    const termLabel = document.createElement("div");
+    termLabel.className = "small fw-semibold mb-2";
+    termLabel.textContent = "Term length";
+    const termOptions = document.createElement("div");
+    termOptions.className = "management-finance-options";
+    termOptions.innerHTML = (FINANCE_CONFIG.termOptions ?? [])
+      .map((years) => {
+        const isActive = Math.abs(years - managementState.financing.termYears) < 1e-6;
+        return `
+          <button type="button" class="btn btn-outline-secondary${
+            isActive ? " active" : ""
+          }" data-term-years="${years}" aria-pressed="${isActive}">
+            ${years} years
+          </button>
+        `;
+      })
+      .join("");
+    termOptions.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-term-years]");
+      if (!button) {
+        return;
+      }
+      const years = Number.parseInt(button.dataset.termYears, 10);
+      if (!Number.isFinite(years)) {
+        return;
+      }
+      managementState.financing.termYears = years;
+      managementState.financing.fixedPeriodYears = resolveFixedPeriodSelection(
+        managementState.financing.termYears,
+        managementState.financing.fixedPeriodYears
+      );
+      refreshManagementContext({ closeIfMissing: false });
+    });
+    termGroup.append(termLabel, termOptions);
+    controlsCard.append(termGroup);
+
+    const fixedGroup = document.createElement("div");
+    fixedGroup.className = "mb-3";
+    const fixedLabel = document.createElement("div");
+    fixedLabel.className = "small fw-semibold mb-2";
+    fixedLabel.textContent = "Fixed-rate period";
+    const fixedOptions = document.createElement("div");
+    fixedOptions.className = "management-finance-options";
+    fixedOptions.innerHTML = (FINANCE_CONFIG.fixedPeriodOptions ?? [])
+      .map((years) => {
+        const disabled = years > managementState.financing.termYears;
+        const isActive =
+          !disabled && Math.abs(years - managementState.financing.fixedPeriodYears) < 1e-6;
+        return `
+          <button type="button" class="btn btn-outline-secondary${
+            isActive ? " active" : ""
+          }" data-fixed-period-years="${years}" aria-pressed="${isActive}" ${
+            disabled ? "disabled" : ""
+          }>
+            ${years} years
+          </button>
+        `;
+      })
+      .join("");
+    fixedOptions.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-fixed-period-years]");
+      if (!button || button.disabled) {
+        return;
+      }
+      const years = Number.parseInt(button.dataset.fixedPeriodYears, 10);
+      if (!Number.isFinite(years)) {
+        return;
+      }
+      managementState.financing.fixedPeriodYears = resolveFixedPeriodSelection(
+        managementState.financing.termYears,
+        years
+      );
+      refreshManagementContext({ closeIfMissing: false });
+    });
+    fixedGroup.append(fixedLabel, fixedOptions);
+    controlsCard.append(fixedGroup);
+
+    const paymentTypeGroup = document.createElement("div");
+    paymentTypeGroup.className = "mb-3";
+    const paymentLabel = document.createElement("div");
+    paymentLabel.className = "small fw-semibold mb-2";
+    paymentLabel.textContent = "Payment structure";
+    const paymentOptions = document.createElement("div");
+    paymentOptions.className = "management-finance-options";
+    paymentOptions.innerHTML = `
+      <button type="button" class="btn btn-outline-secondary${
+        managementState.financing.interestOnly ? "" : " active"
+      }" data-interest-only="false" aria-pressed="${
+      managementState.financing.interestOnly ? "false" : "true"
+    }">
+        Repayment
+      </button>
+      <button type="button" class="btn btn-outline-secondary${
+        managementState.financing.interestOnly ? " active" : ""
+      }" data-interest-only="true" aria-pressed="${
+      managementState.financing.interestOnly ? "true" : "false"
+    }">
+        Interest-only
+      </button>
+    `;
+    paymentOptions.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-interest-only]");
+      if (!button) {
+        return;
+      }
+      managementState.financing.interestOnly = button.dataset.interestOnly === "true";
+      refreshManagementContext({ closeIfMissing: false });
+    });
+    paymentTypeGroup.append(paymentLabel, paymentOptions);
+    controlsCard.append(paymentTypeGroup);
+
+    const preview = document.createElement("div");
+    preview.className = "management-finance-preview";
+    const netCashFlow = roundCurrency(projectedRent - mortgage.monthlyPayment);
+    const previewLines = [
+      `<p class="mb-1"><strong>Deposit:</strong> ${formatCurrency(mortgage.deposit)} (${formatPercentage(
+        managementState.financing.depositRatio
+      )})</p>`,
+      `<p class="mb-1"><strong>Financed amount:</strong> ${formatCurrency(mortgage.principal)}</p>`,
+      `<p class="mb-1"><strong>Payments:</strong> ${formatCurrency(
+        mortgage.monthlyPayment
+      )} / month${managementState.financing.interestOnly ? " (interest-only)" : ""}</p>`,
+      `<p class="mb-1"><strong>Fixed rate:</strong> ${(rateProfile.fixedRate * 100).toFixed(
+        2
+      )}% for ${managementState.financing.fixedPeriodYears} year${
+        managementState.financing.fixedPeriodYears === 1 ? "" : "s"
+      }</p>`,
+      `<p class="mb-0"><strong>Reversion rate:</strong> ${(rateProfile.reversionRate * 100).toFixed(
+        2
+      )}% (base ${(rateProfile.baseRate * 100).toFixed(2)}% + ${(rateProfile.variableRateMargin * 100).toFixed(2)}%)</p>`,
+    ];
+    if (!managementState.financing.interestOnly && projectedRent > 0) {
+      const netLabel = netCashFlow >= 0 ? "text-success" : "text-danger";
+      previewLines.splice(
+        3,
+        0,
+        `<p class="mb-1 ${netLabel}"><strong>Net cash (rent - payment):</strong> ${
+          netCashFlow >= 0
+            ? `+${formatCurrency(netCashFlow)}`
+            : formatCurrency(netCashFlow)
+        }</p>`
+      );
+    }
+    preview.innerHTML = previewLines.join("");
+    if (!managementState.financing.canAffordDeposit) {
+      preview.innerHTML += `<p class="mt-2 text-danger mb-0">Requires ${formatCurrency(
+        roundCurrency(mortgage.deposit - state.balance)
+      )} additional cash for the deposit.</p>`;
+    } else {
+      preview.innerHTML += `<p class="mt-2 text-success mb-0">Deposit affordable with ${formatCurrency(
+        roundCurrency(state.balance - mortgage.deposit)
+      )} remaining.</p>`;
+    }
+    if (managementState.financing.interestOnly) {
+      preview.innerHTML += `<p class="mt-2 mb-0 text-muted">Principal of ${formatCurrency(
+        mortgage.principal
+      )} remains due at term end.</p>`;
+    }
+
+    controlsCard.append(preview);
+
+    elements.managementFinancing.append(controlsCard);
+  }
+
+  function renderManagementTransactionsSection(property, scope) {
+    if (!elements.managementTransactions) {
+      return;
+    }
+    elements.managementTransactions.innerHTML = "";
+
+    if (scope === "market") {
+      const card = document.createElement("div");
+      card.className = "section-card";
+      card.innerHTML = "<h6>Purchase options</h6>";
+
+      const cashLine = document.createElement("p");
+      cashLine.className = "mb-1";
+      const canAffordCash = state.balance >= property.cost;
+      cashLine.innerHTML = `<strong>Cash purchase:</strong> ${formatCurrency(property.cost)} (${canAffordCash ? "Affordable" : "Insufficient funds"})`;
+
+      const mortgage = managementState.financing.previewMortgage;
+      const financeLine = document.createElement("p");
+      financeLine.className = "mb-1";
+      if (mortgage) {
+        financeLine.innerHTML = `<strong>Mortgage:</strong> ${formatCurrency(
+          mortgage.deposit
+        )} deposit (${formatPercentage(managementState.financing.depositRatio)}) → ${formatCurrency(
+          mortgage.monthlyPayment
+        )} / month`;
+      } else {
+        financeLine.textContent = "Adjust deposit or term to preview financing.";
+      }
+
+      const actionRow = document.createElement("div");
+      actionRow.className = "management-actions mt-3";
+
+      const cashButton = document.createElement("button");
+      cashButton.type = "button";
+      cashButton.className = "btn btn-outline-primary";
+      cashButton.textContent = "Buy with cash";
+      cashButton.disabled = !canAffordCash;
+      cashButton.addEventListener("click", () => {
+        handleCashPurchase(property.id);
+        const updated = refreshManagementContext({ closeIfMissing: false });
+        if (!updated) {
+          closeManagementModal();
+        }
+      });
+
+      const financeButton = document.createElement("button");
+      financeButton.type = "button";
+      financeButton.className = "btn btn-primary";
+      financeButton.textContent = "Confirm mortgage";
+      financeButton.disabled = !managementState.financing.canAffordDeposit;
+      financeButton.addEventListener("click", () => {
+        const profile =
+          managementState.financing.rateProfile ??
+          deriveMortgageRateProfile({
+            depositRatio: managementState.financing.depositRatio,
+            termYears: managementState.financing.termYears,
+            fixedPeriodYears: managementState.financing.fixedPeriodYears,
+          });
+        const success = handleMortgagePurchase(property.id, {
+          depositRatio: managementState.financing.depositRatio,
+          termYears: managementState.financing.termYears,
+          fixedPeriodYears: managementState.financing.fixedPeriodYears,
+          rateProfile: profile,
+          interestOnly: managementState.financing.interestOnly,
+        });
+        if (success) {
+          const updated = refreshManagementContext({ closeIfMissing: false });
+          if (!updated) {
+            closeManagementModal();
+          }
+        }
+      });
+
+      actionRow.append(cashButton, financeButton);
+      card.append(cashLine, financeLine, actionRow);
+      elements.managementTransactions.append(card);
+      return;
+    }
+
+    const card = document.createElement("div");
+    card.className = "section-card";
+    card.innerHTML = "<h6>Ownership actions</h6>";
+
+    const salePrice = calculateSalePrice(property);
+    const maintenanceThreshold = MAINTENANCE_CONFIG.criticalThreshold ?? 25;
+    const maintenancePercent = clampMaintenancePercent(property.maintenancePercent ?? 0);
+    const mortgageBreakdown = property.mortgage
+      ? getMortgagePaymentBreakdown(property.mortgage)
+      : null;
+    const outstanding = mortgageBreakdown?.principalRemaining ?? 0;
+    const netProceeds = roundCurrency(salePrice - outstanding);
+    const canSell =
+      maintenancePercent >= maintenanceThreshold && !isPropertyVacant(property);
+
+    const saleInfo = document.createElement("p");
+    saleInfo.className = "mb-1";
+    saleInfo.innerHTML = `<strong>Projected sale:</strong> ${formatCurrency(
+      salePrice
+    )}${outstanding > 0 ? ` (net ${formatCurrency(netProceeds)})` : ""}`;
+
+    const restrictions = [];
+    if (maintenancePercent < maintenanceThreshold) {
+      restrictions.push(
+        `Maintenance must be at least ${maintenanceThreshold}%.`
+      );
+    }
+    if (isPropertyVacant(property)) {
+      restrictions.push("Maintenance work must be complete before selling.");
+    }
+
+    const actionRow = document.createElement("div");
+    actionRow.className = "management-actions mt-3";
+
+    const sellButton = document.createElement("button");
+    sellButton.type = "button";
+    sellButton.className = "btn btn-outline-danger";
+    sellButton.textContent = "Sell property";
+    sellButton.disabled = !canSell;
+    sellButton.addEventListener("click", () => {
+      handleSale(property.id);
+      const updated = refreshManagementContext({ closeIfMissing: true });
+      if (!updated) {
+        closeManagementModal();
+      }
+    });
+
+    actionRow.append(sellButton);
+
+    card.append(saleInfo);
+    if (restrictions.length > 0) {
+      const restrictionList = document.createElement("ul");
+      restrictionList.className = "small text-muted mb-2";
+      restrictions.forEach((message) => {
+        const item = document.createElement("li");
+        item.textContent = message;
+        restrictionList.append(item);
+      });
+      card.append(restrictionList);
+    }
+    card.append(actionRow);
+    elements.managementTransactions.append(card);
+  }
+
+  function renderManagementMaintenanceSection(property, scope) {
+    if (!elements.managementMaintenance) {
+      return;
+    }
+    elements.managementMaintenance.innerHTML = "";
+
+    const card = document.createElement("div");
+    card.className = "section-card";
+    card.innerHTML = "<h6>Maintenance planning</h6>";
+
+    const maintenancePercent = clampMaintenancePercent(property.maintenancePercent ?? 0);
+    const progressWrapper = document.createElement("div");
+    progressWrapper.className = "mb-3";
+    const progressLabel = document.createElement("div");
+    progressLabel.className = "small fw-semibold mb-1";
+    progressLabel.textContent = `Condition: ${maintenancePercent}%`;
+    const progressBar = document.createElement("div");
+    progressBar.className = "management-progress";
+    progressBar.role = "progressbar";
+    progressBar.setAttribute("aria-valuenow", maintenancePercent.toString());
+    progressBar.setAttribute("aria-valuemin", "0");
+    progressBar.setAttribute("aria-valuemax", "100");
+    const bar = document.createElement("div");
+    bar.className = "management-progress-bar";
+    bar.style.width = `${maintenancePercent}%`;
+    progressBar.append(bar);
+    progressWrapper.append(progressLabel, progressBar);
+    card.append(progressWrapper);
+
+    if (scope === "portfolio") {
+      if (property.maintenanceWork) {
+        const work = property.maintenanceWork;
+        const workInfo = document.createElement("p");
+        workInfo.className = "management-note mb-3";
+        workInfo.textContent = `Maintenance underway: ${work.monthsRemaining} month(s) remaining (cost ${formatCurrency(
+          work.cost ?? 0
+        )}). Property is temporarily vacant.`;
+        card.append(workInfo);
+      }
+
+      const scheduleButton = document.createElement("button");
+      scheduleButton.type = "button";
+      scheduleButton.className = "btn btn-outline-secondary";
+      scheduleButton.textContent = "Schedule maintenance";
+      const baseValue = Number.isFinite(property.baseValue)
+        ? property.baseValue
+        : calculatePropertyValue(property);
+      const deficiencyRatio = Math.max(0, 100 - maintenancePercent) / 100;
+      const projectedCost = roundCurrency(
+        baseValue * (MAINTENANCE_CONFIG.refurbishmentCostRatio ?? 0.25) * deficiencyRatio
+      );
+      const canSchedule =
+        !isPropertyVacant(property) && maintenancePercent < 100 && projectedCost <= state.balance;
+      scheduleButton.disabled = !canSchedule;
+      scheduleButton.addEventListener("click", () => {
+        scheduleMaintenance(property.id);
+        refreshManagementContext({ closeIfMissing: false });
+      });
+      card.append(scheduleButton);
+
+      const notes = document.createElement("div");
+      notes.className = "management-note mt-3";
+      if (maintenancePercent >= 100) {
+        notes.textContent = "Property already at 100% maintenance.";
+      } else if (isPropertyVacant(property)) {
+        notes.textContent = "Maintenance already scheduled.";
+      } else if (projectedCost > state.balance) {
+        notes.textContent = `Requires ${formatCurrency(
+          projectedCost
+        )}, but balance is insufficient.`;
+      } else {
+        notes.textContent = `Estimated cost ${formatCurrency(projectedCost)} (paid upfront).`;
+      }
+      card.append(notes);
+    } else {
+      const note = document.createElement("div");
+      note.className = "management-note";
+      note.textContent = "Maintenance scheduling becomes available once the property is owned.";
+      card.append(note);
+    }
+
+    elements.managementMaintenance.append(card);
+  }
+
+  function renderManagementModal(property, scope) {
+    if (!property) {
+      if (elements.managementModalSummary) {
+        elements.managementModalSummary.innerHTML = "<div class=\"management-empty-state\">This property is no longer available.</div>";
+      }
+      return;
+    }
+
+    renderManagementSummary(property, scope);
+    renderManagementOverviewSection(property, scope);
+    renderManagementLeasingSection(property, scope);
+    renderManagementFinancingSection(property, scope);
+    renderManagementTransactionsSection(property, scope);
+    renderManagementMaintenanceSection(property, scope);
+    setManagementSection(managementState.activeSection ?? "overview");
+  }
+
+  function refreshManagementContext({ closeIfMissing = true } = {}) {
+    const { property, scope } = resolveManagedProperty();
+    if (!property) {
+      if (closeIfMissing) {
+        closeManagementModal();
+      } else if (elements.managementModalSummary) {
+        elements.managementModalSummary.innerHTML = "<div class=\"management-empty-state\">Property details unavailable.</div>";
+      }
+      return null;
+    }
+    renderManagementModal(property, scope);
+    return property;
+  }
+
+  function closeManagementModal() {
+    if (managementModalInstance) {
+      managementModalInstance.hide();
+    } else if (elements.managementModal) {
+      elements.managementModal.classList.remove("show", "d-block");
+    }
+    initialiseManagementFinancingState();
+    managementState.propertyId = null;
+    managementState.scope = null;
+    managementState.activeSection = "overview";
+  }
+
+  function openManagementModal(propertyId, scope = "market") {
+    managementState.propertyId = propertyId;
+    managementState.scope = scope;
+    managementState.activeSection = "overview";
+    initialiseManagementFinancingState();
+
+    const property = refreshManagementContext({ closeIfMissing: false });
+    if (!property) {
+      return;
+    }
+
+    if (!managementModalInstance && elements.managementModal && window.bootstrap?.Modal) {
+      managementModalInstance = new window.bootstrap.Modal(elements.managementModal, {
+        backdrop: "static",
+      });
+    }
+
+    if (managementModalInstance) {
+      managementModalInstance.show();
+    } else if (elements.managementModal) {
+      elements.managementModal.classList.add("show", "d-block");
+    }
+  }
+
   function findRentStrategyOption(property, optionKey) {
     const options = getRentStrategyOptions(property);
     if (options.length === 0) {
@@ -491,6 +1442,23 @@ import {
 
   let financeModalInstance = null;
 
+  const managementState = {
+    propertyId: null,
+    scope: null,
+    activeSection: "overview",
+    financing: {
+      depositRatio: FINANCE_CONFIG.defaultDepositRatio,
+      termYears: FINANCE_CONFIG.defaultTermYears,
+      fixedPeriodYears: FINANCE_CONFIG.defaultFixedPeriodYears,
+      interestOnly: false,
+      rateProfile: null,
+      previewMortgage: null,
+      canAffordDeposit: false,
+    },
+  };
+
+  let managementModalInstance = null;
+
   let generatedIdCounter = 1;
 
   function generateUniquePropertyId() {
@@ -706,6 +1674,23 @@ import {
     elements.financePaymentPreview = document.getElementById("financePaymentPreview");
     elements.financeAffordabilityNote = document.getElementById("financeAffordabilityNote");
     elements.confirmFinanceButton = document.getElementById("confirmFinanceButton");
+    elements.managementModal = document.getElementById("managementModal");
+    elements.managementModalLabel = document.getElementById("managementModalLabel");
+    elements.managementModalSubtitle = document.getElementById("managementModalSubtitle");
+    elements.managementModalSummary = document.getElementById("managementModalSummary");
+    elements.managementOverview = document.getElementById("managementOverview");
+    elements.managementLeasing = document.getElementById("managementLeasing");
+    elements.managementFinancing = document.getElementById("managementFinancing");
+    elements.managementTransactions = document.getElementById("managementTransactions");
+    elements.managementMaintenance = document.getElementById("managementMaintenance");
+    elements.managementSectionNav = document.getElementById("managementSectionNav");
+    elements.managementSections = {
+      overview: document.getElementById("management-panel-overview"),
+      leasing: document.getElementById("management-panel-leasing"),
+      financing: document.getElementById("management-panel-financing"),
+      transactions: document.getElementById("management-panel-transactions"),
+      maintenance: document.getElementById("management-panel-maintenance"),
+    };
   }
 
   function deriveMortgageRateProfile({
@@ -1964,7 +2949,7 @@ import {
       card.className = "card property-card h-100";
 
       const cardBody = document.createElement("div");
-      cardBody.className = "card-body d-flex flex-column";
+      cardBody.className = "card-body d-flex flex-column gap-2";
 
       const title = document.createElement("h5");
       title.className = "card-title";
@@ -2034,15 +3019,6 @@ import {
       rent.className = "mb-1";
       const activeTenant = hasActiveTenant(property);
       const rentOption = findRentStrategyOption(property, property.askingRentOption);
-      const formatRentMeta = (option) => {
-        const chance = Number.isFinite(option?.probability)
-          ? `${Math.round((option.probability ?? 0) * 100)}%`
-          : "-";
-        const leaseMonths = option?.leaseMonths ?? 0;
-        return `(${chance} monthly hit · ${leaseMonths}-month lease)`;
-      };
-      let marketRentValueNode = null;
-      let marketRentMetaNode = null;
       if (activeTenant) {
         rent.innerHTML = `<strong>Current rent:</strong> ${formatCurrency(
           property.tenant.rent
@@ -2050,14 +3026,13 @@ import {
           property.leaseMonthsRemaining
         )} remaining)</span>`;
       } else {
-        const rentLabel = document.createElement("strong");
-        rentLabel.textContent = "Target rent:";
-        marketRentValueNode = document.createElement("span");
-        marketRentValueNode.textContent = formatCurrency(rentOption?.monthlyRent ?? 0);
-        marketRentMetaNode = document.createElement("span");
-        marketRentMetaNode.className = "text-muted";
-        marketRentMetaNode.textContent = formatRentMeta(rentOption);
-        rent.append(rentLabel, document.createTextNode(" "), marketRentValueNode, document.createTextNode(" "), marketRentMetaNode);
+        const chance = Number.isFinite(rentOption?.probability)
+          ? `${Math.round((rentOption.probability ?? 0) * 100)}%`
+          : "-";
+        const leaseMonths = rentOption?.leaseMonths ?? 0;
+        rent.innerHTML = `<strong>Target rent:</strong> ${formatCurrency(
+          rentOption?.monthlyRent ?? 0
+        )} <span class="text-muted">(${chance} monthly hit · ${leaseMonths}-month lease)</span>`;
       }
 
       const statusWrapper = document.createElement("div");
@@ -2077,115 +3052,13 @@ import {
         if (property.rentalMarketingActive) {
           statusWrapper.append(createStatusChip("Advertising", "bg-warning text-dark"));
         }
+        statusWrapper.append(
+          createStatusChip(
+            property.autoRelist ? "Auto-relist on" : "Auto-relist off",
+            property.autoRelist ? "bg-success" : "bg-light text-muted border"
+          )
+        );
       }
-
-      const rentControls = document.createElement("div");
-      rentControls.className = "mb-3";
-      if (rentOption) {
-        const rentLabel = document.createElement("label");
-        rentLabel.className = "form-label small fw-semibold";
-        rentLabel.textContent = activeTenant ? "Next rent strategy" : "Rent strategy";
-        rentLabel.setAttribute("for", `rent-option-${property.id}`);
-
-        const rentSelect = document.createElement("select");
-        rentSelect.className = "form-select form-select-sm";
-        rentSelect.id = `rent-option-${property.id}`;
-        getRentStrategyOptions(property).forEach((option) => {
-          const optionElement = document.createElement("option");
-          optionElement.value = option.key;
-          const chance = Math.round((option.probability ?? 0) * 100);
-          optionElement.textContent = `${option.label} · ${formatCurrency(
-            option.monthlyRent
-          )} (${chance}% hit · ${option.leaseMonths}-mo lease)`;
-          rentSelect.append(optionElement);
-        });
-        rentSelect.value = rentOption.key;
-        rentSelect.addEventListener("change", (event) => {
-          const selectedOption = handleRentOptionChange(property.id, event.target.value, {
-            scope: "market",
-            updateUI: false,
-          });
-          if (!activeTenant && selectedOption && marketRentValueNode && marketRentMetaNode) {
-            marketRentValueNode.textContent = formatCurrency(selectedOption.monthlyRent);
-            marketRentMetaNode.textContent = formatRentMeta(selectedOption);
-          }
-        });
-        const rentHelp = document.createElement("div");
-        rentHelp.className = "form-text small";
-        rentHelp.textContent = activeTenant
-          ? "Applies after the inherited lease ends."
-          : "Adjust to balance rent against vacancy risk.";
-        rentControls.append(rentLabel, rentSelect, rentHelp);
-      }
-
-      const autoRelistWrapper = document.createElement("div");
-      autoRelistWrapper.className = "form-check form-switch form-check-reverse mb-3";
-      const autoRelistCheckbox = document.createElement("input");
-      autoRelistCheckbox.className = "form-check-input";
-      autoRelistCheckbox.type = "checkbox";
-      autoRelistCheckbox.id = `market-autorelist-${property.id}`;
-      autoRelistCheckbox.checked = Boolean(property.autoRelist);
-      autoRelistCheckbox.addEventListener("change", (event) => {
-        handleAutoRelistToggle(property.id, event.target.checked, { scope: "market" });
-      });
-      const autoRelistLabel = document.createElement("label");
-      autoRelistLabel.className = "form-check-label small";
-      autoRelistLabel.setAttribute("for", autoRelistCheckbox.id);
-      autoRelistLabel.textContent = "Auto-relist when vacant";
-      autoRelistWrapper.append(autoRelistCheckbox, autoRelistLabel);
-
-      const mortgageInfo = document.createElement("div");
-      mortgageInfo.className = "small text-muted mb-3";
-      const defaultDepositRatio = FINANCE_CONFIG.defaultDepositRatio;
-      const defaultTermYears = FINANCE_CONFIG.defaultTermYears;
-      const previewProfile = deriveMortgageRateProfile({
-        depositRatio: defaultDepositRatio,
-        termYears: defaultTermYears,
-        fixedPeriodYears: FINANCE_CONFIG.defaultFixedPeriodYears,
-      });
-      const mortgagePreview = createMortgageForCost(property.cost, {
-        depositRatio: defaultDepositRatio,
-        termYears: defaultTermYears,
-        fixedPeriodYears: FINANCE_CONFIG.defaultFixedPeriodYears,
-        rateProfile: previewProfile,
-      });
-      const previewFixedYears = Math.min(
-        previewProfile.fixedPeriodYears,
-        defaultTermYears
-      );
-      const fixedPeriodLabel = `${previewFixedYears} year${
-        previewFixedYears === 1 ? "" : "s"
-      }`;
-      mortgageInfo.innerHTML = `
-        <div>
-          <strong>Finance preview:</strong>
-          ${formatCurrency(mortgagePreview.deposit)} deposit (${formatPercentage(
-            defaultDepositRatio
-          )}) → ${formatCurrency(mortgagePreview.monthlyPayment)} / month over ${defaultTermYears} years.
-        </div>
-        <div class="mt-1">
-          Rate: fixed ${(previewProfile.fixedRate * 100).toFixed(2)}% for ${fixedPeriodLabel}, then base ${(previewProfile.baseRate * 100).toFixed(2)}% + ${(previewProfile.variableRateMargin * 100).toFixed(2)}% (${(previewProfile.reversionRate * 100).toFixed(2)}%).
-        </div>
-        <div class="mt-1">Adjust deposit (5%-50%) and term (2-25 years) in the financing panel.</div>
-      `;
-
-      const buttonGroup = document.createElement("div");
-      buttonGroup.className = "d-grid gap-2 mt-auto";
-
-      const cashButton = document.createElement("button");
-      cashButton.type = "button";
-      cashButton.className = "btn btn-outline-primary";
-      cashButton.textContent = "Buy with cash";
-      cashButton.disabled = state.balance < property.cost;
-      cashButton.addEventListener("click", () => handleCashPurchase(property.id));
-
-      const financeButton = document.createElement("button");
-      financeButton.type = "button";
-      financeButton.className = "btn btn-primary";
-      financeButton.textContent = "Finance property";
-      financeButton.addEventListener("click", () => openFinanceModal(property.id));
-
-      buttonGroup.append(cashButton, financeButton);
 
       const detailSection = document.createElement("div");
       detailSection.className = "mb-3 flex-grow-1";
@@ -2197,22 +3070,19 @@ import {
         maintenanceWrapper
       );
 
-      const rentControlsNode = rentControls.childNodes.length > 0 ? rentControls : null;
+      const manageButton = document.createElement("button");
+      manageButton.type = "button";
+      manageButton.className = "btn btn-primary mt-auto";
+      manageButton.textContent = "Manage";
+      manageButton.setAttribute("aria-label", `Manage ${property.name}`);
+      manageButton.addEventListener("click", () => {
+        openManagementModal(property.id, "market");
+      });
 
-      [
-        title,
-        description,
-        detailSection,
-        cost,
-        statusWrapper,
-        rent,
-        rentControlsNode,
-        autoRelistWrapper,
-        mortgageInfo,
-        buttonGroup,
-      ]
+      [title, description, detailSection, cost, statusWrapper, rent, manageButton]
         .filter(Boolean)
         .forEach((node) => cardBody.append(node));
+
       card.append(cardBody);
       col.append(card);
       elements.propertyList.append(col);
@@ -2572,6 +3442,12 @@ import {
             createStatusChip("Idle", "bg-light text-muted border")
           );
         }
+        tenantStatusWrapper.append(
+          createStatusChip(
+            property.autoRelist ? "Auto-relist on" : "Auto-relist off",
+            property.autoRelist ? "bg-success" : "bg-light text-muted border"
+          )
+        );
       }
       info.append(tenantStatusWrapper);
 
@@ -2645,95 +3521,6 @@ import {
       maintenanceBlock.append(maintenanceLabel, maintenanceProgress);
       info.append(maintenanceBlock);
 
-      const rentControlsRow = document.createElement("div");
-      rentControlsRow.className = "d-flex flex-column flex-lg-row align-items-lg-center gap-3 mb-3";
-
-      const rentControlNodes = [];
-      let updatePortfolioSummary = null;
-
-      if (rentOption) {
-        const rentGroup = document.createElement("div");
-        rentGroup.className = "flex-grow-1";
-        const rentLabel = document.createElement("label");
-        rentLabel.className = "form-label small fw-semibold mb-1";
-        rentLabel.textContent = activeTenant ? "Next rent strategy" : "Rent strategy";
-        rentLabel.setAttribute("for", `portfolio-rent-option-${property.id}`);
-        const rentSelect = document.createElement("select");
-        rentSelect.className = "form-select form-select-sm";
-        rentSelect.id = `portfolio-rent-option-${property.id}`;
-        getRentStrategyOptions(property).forEach((option) => {
-          const optionElement = document.createElement("option");
-          optionElement.value = option.key;
-          const chance = Math.round((option.probability ?? 0) * 100);
-          optionElement.textContent = `${option.label} · ${formatCurrency(
-            option.monthlyRent
-          )} (${chance}% hit · ${option.leaseMonths}-mo lease)`;
-          rentSelect.append(optionElement);
-        });
-        rentSelect.value = rentOption.key;
-        rentSelect.addEventListener("change", (event) => {
-          const selectedOption = handleRentOptionChange(property.id, event.target.value, {
-            scope: "portfolio",
-            updateUI: false,
-          });
-          if (selectedOption) {
-            if (portfolioRentValueNode) {
-              portfolioRentValueNode.textContent = formatCurrency(selectedOption.monthlyRent);
-            }
-            if (portfolioRentMetaNode) {
-              portfolioRentMetaNode.textContent = formatPortfolioRentMeta(selectedOption);
-            }
-            if (updatePortfolioSummary) {
-              updatePortfolioSummary(selectedOption);
-            }
-          }
-        });
-        const rentHelp = document.createElement("div");
-        rentHelp.className = "form-text small";
-        rentHelp.textContent = activeTenant
-          ? "Applies once the current lease ends."
-          : "Adjust to balance rent against vacancy risk.";
-        rentGroup.append(rentLabel, rentSelect, rentHelp);
-        rentControlNodes.push(rentGroup);
-      }
-
-      const autoWrapper = document.createElement("div");
-      autoWrapper.className = "form-check form-switch mb-0";
-      const autoCheckbox = document.createElement("input");
-      autoCheckbox.className = "form-check-input";
-      autoCheckbox.type = "checkbox";
-      autoCheckbox.id = `portfolio-autorelist-${property.id}`;
-      autoCheckbox.checked = Boolean(property.autoRelist);
-      autoCheckbox.addEventListener("change", (event) => {
-        handleAutoRelistToggle(property.id, event.target.checked, { scope: "portfolio" });
-      });
-      const autoLabel = document.createElement("label");
-      autoLabel.className = "form-check-label small";
-      autoLabel.setAttribute("for", autoCheckbox.id);
-      autoLabel.textContent = "Auto-relist when vacant";
-      autoWrapper.append(autoCheckbox, autoLabel);
-      rentControlNodes.push(autoWrapper);
-
-      if (!activeTenant) {
-        const marketingButton = document.createElement("button");
-        marketingButton.type = "button";
-        marketingButton.className = "btn btn-outline-primary btn-sm";
-        marketingButton.textContent = property.rentalMarketingActive
-          ? "Pause advertising"
-          : "List for rent";
-        const maintenanceVacant = isPropertyVacant(property);
-        marketingButton.disabled = maintenanceVacant;
-        marketingButton.addEventListener("click", () => {
-          handleMarketingToggle(property.id, !property.rentalMarketingActive);
-        });
-        rentControlNodes.push(marketingButton);
-      }
-
-      if (rentControlNodes.length > 0) {
-        rentControlNodes.forEach((node) => rentControlsRow.append(node));
-        info.append(rentControlsRow);
-      }
-
       const cashflowDetails = document.createElement("div");
       cashflowDetails.className = "small text-muted";
       let mortgageBreakdown = null;
@@ -2761,22 +3548,18 @@ import {
         };
 
         const summaryLine = document.createElement("div");
-        const updateSummaryLine = (optionForSummary = rentOption) => {
-          const rentDescriptor = activeTenant
-            ? `Rent ${formatCurrency(activeRentAmount)}`
-            : `Vacant (target ${formatCurrency(optionForSummary?.monthlyRent ?? 0)})`;
-          if (breakdown.isInterestOnly) {
-            summaryLine.textContent = `${rentDescriptor} · Interest-only ${formatCurrency(
-              breakdown.monthlyPayment
-            )} / month`;
-          } else {
-            summaryLine.textContent = `${rentDescriptor} · Mortgage ${formatCurrency(
-              breakdown.monthlyPayment
-            )} / month`;
-          }
-        };
-        updateSummaryLine(rentOption);
-        updatePortfolioSummary = updateSummaryLine;
+        const rentDescriptor = activeTenant
+          ? `Rent ${formatCurrency(activeRentAmount)}`
+          : `Vacant (target ${formatCurrency(rentOption?.monthlyRent ?? 0)})`;
+        if (breakdown.isInterestOnly) {
+          summaryLine.textContent = `${rentDescriptor} · Interest-only ${formatCurrency(
+            breakdown.monthlyPayment
+          )} / month`;
+        } else {
+          summaryLine.textContent = `${rentDescriptor} · Mortgage ${formatCurrency(
+            breakdown.monthlyPayment
+          )} / month`;
+        }
 
         const principalLine = document.createElement("div");
         if (breakdown.isInterestOnly) {
@@ -2855,14 +3638,10 @@ import {
         );
       } else {
         const summaryLine = document.createElement("div");
-        const updateSummaryLine = (optionForSummary = rentOption) => {
-          const rentDescriptor = activeTenant
-            ? `Rent ${formatCurrency(activeRentAmount)}`
-            : `Vacant (target ${formatCurrency(optionForSummary?.monthlyRent ?? 0)})`;
-          summaryLine.textContent = `${rentDescriptor} · No mortgage obligations`;
-        };
-        updateSummaryLine(rentOption);
-        updatePortfolioSummary = updateSummaryLine;
+        const rentDescriptor = activeTenant
+          ? `Rent ${formatCurrency(activeRentAmount)}`
+          : `Vacant (target ${formatCurrency(rentOption?.monthlyRent ?? 0)})`;
+        summaryLine.textContent = `${rentDescriptor} · No mortgage obligations`;
         cashflowDetails.append(summaryLine);
       }
       info.append(cashflowDetails);
@@ -2876,30 +3655,16 @@ import {
       rentBadge.className = `badge ${netCash >= 0 ? "bg-success" : "bg-danger"} rounded-pill`;
       rentBadge.textContent = `Net / month: ${formatCurrency(netCash)}`;
 
-      const maintenanceButton = document.createElement("button");
-      maintenanceButton.type = "button";
-      maintenanceButton.className = "btn btn-outline-secondary btn-sm";
-      maintenanceButton.textContent = "Schedule maintenance";
-      const canSchedule = !isPropertyVacant(property) && maintenancePercent < 100;
-      maintenanceButton.disabled = !canSchedule;
-      maintenanceButton.addEventListener("click", () => scheduleMaintenance(property.id));
+      const manageButton = document.createElement("button");
+      manageButton.type = "button";
+      manageButton.className = "btn btn-primary btn-sm";
+      manageButton.textContent = "Manage";
+      manageButton.setAttribute("aria-label", `Manage ${property.name}`);
+      manageButton.addEventListener("click", () => {
+        openManagementModal(property.id, "portfolio");
+      });
 
-      const salePrice = calculateSalePrice(property);
-      let netSaleLabel = `Sell for ${formatCurrency(salePrice)}`;
-      if (mortgageBreakdown) {
-        const settlement = mortgageBreakdown.principalRemaining ?? 0;
-        if (settlement > 0) {
-          const netProceeds = roundCurrency(salePrice - settlement);
-          netSaleLabel = `Sell for ${formatCurrency(salePrice)} (net ${formatCurrency(netProceeds)})`;
-        }
-      }
-      const sellButton = document.createElement("button");
-      sellButton.type = "button";
-      sellButton.className = "btn btn-outline-danger btn-sm";
-      sellButton.textContent = netSaleLabel;
-      sellButton.addEventListener("click", () => handleSale(property.id));
-
-      actionWrapper.append(rentBadge, maintenanceButton, sellButton);
+      actionWrapper.append(rentBadge, manageButton);
 
       item.append(info, actionWrapper);
       elements.incomeStatus.append(item);
@@ -3057,6 +3822,32 @@ import {
     }
   }
 
+  function wireUpManagementModal() {
+    if (elements.managementSectionNav) {
+      elements.managementSectionNav.addEventListener("click", (event) => {
+        const button = event.target.closest(".management-nav-link");
+        if (!button) {
+          return;
+        }
+        const section = button.dataset.section;
+        if (section) {
+          setManagementSection(section);
+        }
+      });
+    }
+
+    if (elements.managementModal) {
+      elements.managementModal.addEventListener("hide.bs.modal", () => {
+        managementState.activeSection = "overview";
+      });
+      elements.managementModal.addEventListener("hidden.bs.modal", () => {
+        initialiseManagementFinancingState();
+        managementState.propertyId = null;
+        managementState.scope = null;
+      });
+    }
+  }
+
   function wireUpEvents() {
     elements.resetButton.addEventListener("click", () => {
       resetGame();
@@ -3064,6 +3855,7 @@ import {
 
     elements.speedControl.addEventListener("change", handleSpeedChange);
     wireUpFinanceModal();
+    wireUpManagementModal();
   }
 
   document.addEventListener("DOMContentLoaded", () => {

@@ -100,6 +100,146 @@
 
     <div
       class="modal fade"
+      id="managementModal"
+      tabindex="-1"
+      aria-labelledby="managementModalLabel"
+      aria-modal="true"
+      role="dialog"
+      data-bs-focus="true"
+    >
+      <div class="modal-dialog modal-dialog-scrollable modal-xl">
+        <div class="modal-content management-modal">
+          <div class="modal-header">
+            <div>
+              <h5 class="modal-title" id="managementModalLabel">Property management</h5>
+              <p id="managementModalSubtitle" class="mb-0 small text-muted"></p>
+            </div>
+            <button
+              type="button"
+              class="btn-close"
+              data-bs-dismiss="modal"
+              aria-label="Close management hub"
+            ></button>
+          </div>
+          <div class="modal-body">
+            <div class="management-summary" id="managementModalSummary"></div>
+            <div class="management-layout">
+              <nav
+                id="managementSectionNav"
+                class="management-nav"
+                role="tablist"
+                aria-orientation="vertical"
+              >
+                <button
+                  type="button"
+                  class="management-nav-link active"
+                  data-section="overview"
+                  id="management-tab-overview"
+                  aria-controls="management-panel-overview"
+                  aria-selected="true"
+                >
+                  Overview
+                </button>
+                <button
+                  type="button"
+                  class="management-nav-link"
+                  data-section="leasing"
+                  id="management-tab-leasing"
+                  aria-controls="management-panel-leasing"
+                  aria-selected="false"
+                >
+                  Leasing
+                </button>
+                <button
+                  type="button"
+                  class="management-nav-link"
+                  data-section="financing"
+                  id="management-tab-financing"
+                  aria-controls="management-panel-financing"
+                  aria-selected="false"
+                >
+                  Financing
+                </button>
+                <button
+                  type="button"
+                  class="management-nav-link"
+                  data-section="transactions"
+                  id="management-tab-transactions"
+                  aria-controls="management-panel-transactions"
+                  aria-selected="false"
+                >
+                  Buying &amp; Selling
+                </button>
+                <button
+                  type="button"
+                  class="management-nav-link"
+                  data-section="maintenance"
+                  id="management-tab-maintenance"
+                  aria-controls="management-panel-maintenance"
+                  aria-selected="false"
+                >
+                  Maintenance
+                </button>
+              </nav>
+              <div class="management-content">
+                <section
+                  id="management-panel-overview"
+                  class="management-section active"
+                  role="tabpanel"
+                  aria-labelledby="management-tab-overview"
+                >
+                  <div id="managementOverview"></div>
+                </section>
+                <section
+                  id="management-panel-leasing"
+                  class="management-section"
+                  role="tabpanel"
+                  aria-labelledby="management-tab-leasing"
+                >
+                  <div id="managementLeasing"></div>
+                </section>
+                <section
+                  id="management-panel-financing"
+                  class="management-section"
+                  role="tabpanel"
+                  aria-labelledby="management-tab-financing"
+                >
+                  <div id="managementFinancing"></div>
+                </section>
+                <section
+                  id="management-panel-transactions"
+                  class="management-section"
+                  role="tabpanel"
+                  aria-labelledby="management-tab-transactions"
+                >
+                  <div id="managementTransactions"></div>
+                </section>
+                <section
+                  id="management-panel-maintenance"
+                  class="management-section"
+                  role="tabpanel"
+                  aria-labelledby="management-tab-maintenance"
+                >
+                  <div id="managementMaintenance"></div>
+                </section>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button
+              type="button"
+              class="btn btn-outline-secondary"
+              data-bs-dismiss="modal"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div
+      class="modal fade"
       id="financePropertyModal"
       tabindex="-1"
       aria-labelledby="financePropertyModalLabel"
