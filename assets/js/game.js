@@ -1614,16 +1614,20 @@ import {
     return calculateMaintenanceAdjustedValue(baseValue, maintenancePercent);
   }
 
-  function handleRentOptionChange(propertyId, optionKey, { scope } = {}) {
+  function handleRentOptionChange(
+    propertyId,
+    optionKey,
+    { scope, updateUI: shouldUpdateUI = true } = {}
+  ) {
     const collection = scope === "portfolio" ? state.portfolio : state.market;
     const property = collection.find((item) => item.id === propertyId);
     if (!property) {
-      return;
+      return null;
     }
 
     const option = findRentStrategyOption(property, optionKey);
     if (!option) {
-      return;
+      return null;
     }
 
     property.askingRentOption = option.key;
@@ -1641,7 +1645,11 @@ import {
       );
     }
 
-    updateUI();
+    if (shouldUpdateUI) {
+      updateUI();
+    }
+
+    return option;
   }
 
   function handleAutoRelistToggle(propertyId, enabled, { scope } = {}) {
@@ -2026,9 +2034,15 @@ import {
       rent.className = "mb-1";
       const activeTenant = hasActiveTenant(property);
       const rentOption = findRentStrategyOption(property, property.askingRentOption);
-      const probabilityLabel = rentOption
-        ? `${Math.round((rentOption.probability ?? 0) * 100)}%`
-        : null;
+      const formatRentMeta = (option) => {
+        const chance = Number.isFinite(option?.probability)
+          ? `${Math.round((option.probability ?? 0) * 100)}%`
+          : "-";
+        const leaseMonths = option?.leaseMonths ?? 0;
+        return `(${chance} monthly hit · ${leaseMonths}-month lease)`;
+      };
+      let marketRentValueNode = null;
+      let marketRentMetaNode = null;
       if (activeTenant) {
         rent.innerHTML = `<strong>Current rent:</strong> ${formatCurrency(
           property.tenant.rent
@@ -2036,11 +2050,14 @@ import {
           property.leaseMonthsRemaining
         )} remaining)</span>`;
       } else {
-        rent.innerHTML = `<strong>Target rent:</strong> ${formatCurrency(
-          rentOption?.monthlyRent ?? 0
-        )} <span class="text-muted">(${probabilityLabel ?? "-"} monthly hit · ${
-          rentOption?.leaseMonths ?? 0
-        }-month lease)</span>`;
+        const rentLabel = document.createElement("strong");
+        rentLabel.textContent = "Target rent:";
+        marketRentValueNode = document.createElement("span");
+        marketRentValueNode.textContent = formatCurrency(rentOption?.monthlyRent ?? 0);
+        marketRentMetaNode = document.createElement("span");
+        marketRentMetaNode.className = "text-muted";
+        marketRentMetaNode.textContent = formatRentMeta(rentOption);
+        rent.append(rentLabel, document.createTextNode(" "), marketRentValueNode, document.createTextNode(" "), marketRentMetaNode);
       }
 
       const statusWrapper = document.createElement("div");
@@ -2084,7 +2101,14 @@ import {
         });
         rentSelect.value = rentOption.key;
         rentSelect.addEventListener("change", (event) => {
-          handleRentOptionChange(property.id, event.target.value, { scope: "market" });
+          const selectedOption = handleRentOptionChange(property.id, event.target.value, {
+            scope: "market",
+            updateUI: false,
+          });
+          if (!activeTenant && selectedOption && marketRentValueNode && marketRentMetaNode) {
+            marketRentValueNode.textContent = formatCurrency(selectedOption.monthlyRent);
+            marketRentMetaNode.textContent = formatRentMeta(selectedOption);
+          }
         });
         const rentHelp = document.createElement("div");
         rentHelp.className = "form-text small";
@@ -2563,16 +2587,32 @@ import {
       const targetRentAmount = rentOption?.monthlyRent ?? 0;
       const tenancyDetails = document.createElement("div");
       tenancyDetails.className = "small mb-2";
+      const formatPortfolioRentMeta = (option) => {
+        const chance = Number.isFinite(option?.probability)
+          ? `${Math.round((option.probability ?? 0) * 100)}%`
+          : "-";
+        const leaseMonths = option?.leaseMonths ?? 0;
+        return ` · ${chance} monthly hit · ${leaseMonths}-month lease`;
+      };
+      let portfolioRentValueNode = null;
+      let portfolioRentMetaNode = null;
       if (activeTenant) {
         tenancyDetails.innerHTML = `<strong>Current rent:</strong> ${formatCurrency(
           property.tenant.rent
         )} (lease ${formatLeaseCountdown(property.leaseMonthsRemaining)} remaining)`;
       } else {
-        tenancyDetails.innerHTML = `<strong>Target rent:</strong> ${formatCurrency(
-          targetRentAmount
-        )} · ${Math.round((rentOption?.probability ?? 0) * 100)}% monthly hit · ${
-          rentOption?.leaseMonths ?? 0
-        }-month lease`;
+        const tenancyLabel = document.createElement("strong");
+        tenancyLabel.textContent = "Target rent:";
+        portfolioRentValueNode = document.createElement("span");
+        portfolioRentValueNode.textContent = formatCurrency(targetRentAmount);
+        portfolioRentMetaNode = document.createElement("span");
+        portfolioRentMetaNode.textContent = formatPortfolioRentMeta(rentOption);
+        tenancyDetails.append(
+          tenancyLabel,
+          document.createTextNode(" "),
+          portfolioRentValueNode,
+          portfolioRentMetaNode
+        );
       }
       info.append(tenancyDetails);
 
@@ -2609,6 +2649,7 @@ import {
       rentControlsRow.className = "d-flex flex-column flex-lg-row align-items-lg-center gap-3 mb-3";
 
       const rentControlNodes = [];
+      let updatePortfolioSummary = null;
 
       if (rentOption) {
         const rentGroup = document.createElement("div");
@@ -2631,7 +2672,21 @@ import {
         });
         rentSelect.value = rentOption.key;
         rentSelect.addEventListener("change", (event) => {
-          handleRentOptionChange(property.id, event.target.value, { scope: "portfolio" });
+          const selectedOption = handleRentOptionChange(property.id, event.target.value, {
+            scope: "portfolio",
+            updateUI: false,
+          });
+          if (selectedOption) {
+            if (portfolioRentValueNode) {
+              portfolioRentValueNode.textContent = formatCurrency(selectedOption.monthlyRent);
+            }
+            if (portfolioRentMetaNode) {
+              portfolioRentMetaNode.textContent = formatPortfolioRentMeta(selectedOption);
+            }
+            if (updatePortfolioSummary) {
+              updatePortfolioSummary(selectedOption);
+            }
+          }
         });
         const rentHelp = document.createElement("div");
         rentHelp.className = "form-text small";
@@ -2706,18 +2761,22 @@ import {
         };
 
         const summaryLine = document.createElement("div");
-        const rentDescriptor = activeTenant
-          ? `Rent ${formatCurrency(activeRentAmount)}`
-          : `Vacant (target ${formatCurrency(targetRentAmount)})`;
-        if (breakdown.isInterestOnly) {
-          summaryLine.textContent = `${rentDescriptor} · Interest-only ${formatCurrency(
-            breakdown.monthlyPayment
-          )} / month`;
-        } else {
-          summaryLine.textContent = `${rentDescriptor} · Mortgage ${formatCurrency(
-            breakdown.monthlyPayment
-          )} / month`;
-        }
+        const updateSummaryLine = (optionForSummary = rentOption) => {
+          const rentDescriptor = activeTenant
+            ? `Rent ${formatCurrency(activeRentAmount)}`
+            : `Vacant (target ${formatCurrency(optionForSummary?.monthlyRent ?? 0)})`;
+          if (breakdown.isInterestOnly) {
+            summaryLine.textContent = `${rentDescriptor} · Interest-only ${formatCurrency(
+              breakdown.monthlyPayment
+            )} / month`;
+          } else {
+            summaryLine.textContent = `${rentDescriptor} · Mortgage ${formatCurrency(
+              breakdown.monthlyPayment
+            )} / month`;
+          }
+        };
+        updateSummaryLine(rentOption);
+        updatePortfolioSummary = updateSummaryLine;
 
         const principalLine = document.createElement("div");
         if (breakdown.isInterestOnly) {
@@ -2796,9 +2855,14 @@ import {
         );
       } else {
         const summaryLine = document.createElement("div");
-        summaryLine.textContent = activeTenant
-          ? `Rent ${formatCurrency(activeRentAmount)} · No mortgage obligations`
-          : `Vacant (target ${formatCurrency(targetRentAmount)}) · No mortgage obligations`;
+        const updateSummaryLine = (optionForSummary = rentOption) => {
+          const rentDescriptor = activeTenant
+            ? `Rent ${formatCurrency(activeRentAmount)}`
+            : `Vacant (target ${formatCurrency(optionForSummary?.monthlyRent ?? 0)})`;
+          summaryLine.textContent = `${rentDescriptor} · No mortgage obligations`;
+        };
+        updateSummaryLine(rentOption);
+        updatePortfolioSummary = updateSummaryLine;
         cashflowDetails.append(summaryLine);
       }
       info.append(cashflowDetails);
