@@ -1426,6 +1426,8 @@ import {
     timerId: null,
     lastRentCollectionDay: 0,
     lastMarketGenerationDay: 0,
+    pauseDepth: 0,
+    isPaused: false,
   };
 
   const elements = {};
@@ -1660,6 +1662,7 @@ import {
     elements.historyLog = document.getElementById("historyLog");
     elements.resetButton = document.getElementById("resetButton");
     elements.speedControl = document.getElementById("speedControl");
+    elements.pauseBadge = document.getElementById("gamePausedBadge");
     elements.financeModal = document.getElementById("financePropertyModal");
     elements.financePropertyName = document.getElementById("financePropertyName");
     elements.financePropertySummary = document.getElementById("financePropertySummary");
@@ -2209,6 +2212,8 @@ import {
     state.lastCentralBankAdjustmentDay = 0;
     state.lastRentCollectionDay = 0;
     state.lastMarketGenerationDay = state.day;
+    state.pauseDepth = 0;
+    state.isPaused = false;
     financeState.rateProfile = null;
     if (logInitialMessage) {
       addHistoryEntry("New game started with $1,000 in capital.");
@@ -2235,7 +2240,43 @@ import {
     if (state.timerId) {
       clearInterval(state.timerId);
     }
+    if (state.isPaused) {
+      state.timerId = null;
+      return;
+    }
     state.timerId = setInterval(handleDayTick, state.tickLength);
+  }
+
+  function pauseGame() {
+    if (!Number.isFinite(state.pauseDepth)) {
+      state.pauseDepth = 0;
+    }
+    state.pauseDepth += 1;
+    if (state.pauseDepth === 1) {
+      state.isPaused = true;
+      if (state.timerId) {
+        clearInterval(state.timerId);
+        state.timerId = null;
+      }
+    }
+    updatePauseUI();
+  }
+
+  function resumeGame() {
+    if (!Number.isFinite(state.pauseDepth)) {
+      state.pauseDepth = 0;
+    }
+    if (state.pauseDepth > 0) {
+      state.pauseDepth -= 1;
+    }
+    if (state.pauseDepth <= 0) {
+      state.pauseDepth = 0;
+      if (state.isPaused) {
+        state.isPaused = false;
+        restartTimer();
+      }
+    }
+    updatePauseUI();
   }
 
   function handleSpeedChange(event) {
@@ -3682,6 +3723,15 @@ import {
       .join("");
   }
 
+  function updatePauseUI() {
+    if (elements.speedControl) {
+      elements.speedControl.disabled = Boolean(state.isPaused);
+    }
+    if (elements.pauseBadge) {
+      elements.pauseBadge.classList.toggle("d-none", !state.isPaused);
+    }
+  }
+
   function updateUI() {
     elements.balance.textContent = formatCurrency(state.balance);
     elements.day.textContent = state.day.toString();
@@ -3697,6 +3747,7 @@ import {
     renderProperties();
     renderIncomeStatus();
     renderHistory();
+    updatePauseUI();
   }
 
   function resetGame() {
@@ -3815,9 +3866,11 @@ import {
     }
 
     if (elements.financeModal) {
+      elements.financeModal.addEventListener("show.bs.modal", pauseGame);
       elements.financeModal.addEventListener("hidden.bs.modal", () => {
         financeState.propertyId = null;
         financeState.rateProfile = null;
+        resumeGame();
       });
     }
   }
@@ -3837,6 +3890,7 @@ import {
     }
 
     if (elements.managementModal) {
+      elements.managementModal.addEventListener("show.bs.modal", pauseGame);
       elements.managementModal.addEventListener("hide.bs.modal", () => {
         managementState.activeSection = "overview";
       });
@@ -3844,6 +3898,7 @@ import {
         initialiseManagementFinancingState();
         managementState.propertyId = null;
         managementState.scope = null;
+        resumeGame();
       });
     }
   }
