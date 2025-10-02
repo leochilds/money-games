@@ -173,6 +173,74 @@ import {
     return Boolean(property?.tenant && (property.tenant.leaseMonthsRemaining ?? 0) > 0);
   }
 
+  function getTenantMonthsRemaining(property) {
+    if (!hasActiveTenant(property)) {
+      return 0;
+    }
+    const tenant = property.tenant ?? {};
+    const remaining = tenant.leaseMonthsRemaining ?? property.leaseMonthsRemaining ?? tenant.leaseLengthMonths ?? 0;
+    const numericRemaining = Number(remaining);
+    if (!Number.isFinite(numericRemaining)) {
+      return 0;
+    }
+    return Math.max(Math.round(numericRemaining), 0);
+  }
+
+  function forecastMaintenancePercent(property, { maintenancePercent, delayMonths } = {}) {
+    let basePercentCandidate;
+    if (Number.isFinite(maintenancePercent)) {
+      basePercentCandidate = maintenancePercent;
+    } else if (Number.isFinite(property?.maintenancePercent)) {
+      basePercentCandidate = property.maintenancePercent;
+    } else if (
+      Array.isArray(MAINTENANCE_CONFIG.initialPercentRange) &&
+      MAINTENANCE_CONFIG.initialPercentRange.length === 2
+    ) {
+      const [minPercent, maxPercent] = MAINTENANCE_CONFIG.initialPercentRange;
+      basePercentCandidate = Number.isFinite(maxPercent)
+        ? maxPercent
+        : Number.isFinite(minPercent)
+        ? minPercent
+        : 100;
+    } else {
+      basePercentCandidate = 100;
+    }
+    const currentPercent = clampMaintenancePercent(basePercentCandidate);
+
+    const delay = Number.isFinite(delayMonths)
+      ? Math.max(delayMonths, 0)
+      : getTenantMonthsRemaining(property);
+
+    if (delay <= 0) {
+      return currentPercent;
+    }
+
+    const occupiedDecay = MAINTENANCE_CONFIG.occupiedDecayPerMonth ?? 0;
+    const projected = currentPercent - occupiedDecay * delay;
+    return clampMaintenancePercent(projected);
+  }
+
+  function estimateMaintenanceCost(property, { delayMonths } = {}) {
+    if (!property) {
+      return {
+        baseValue: 0,
+        projectedCost: 0,
+        projectedPercent: 0,
+        deficiencyRatio: 0,
+      };
+    }
+
+    const baseValue = Number.isFinite(property.baseValue)
+      ? property.baseValue
+      : calculatePropertyValue(property);
+    const projectedPercent = forecastMaintenancePercent(property, { delayMonths });
+    const deficiencyRatio = Math.max(0, 100 - projectedPercent) / 100;
+    const costRatio = MAINTENANCE_CONFIG.refurbishmentCostRatio ?? 0.25;
+    const projectedCost = roundCurrency(baseValue * costRatio * deficiencyRatio);
+
+    return { baseValue, projectedCost, projectedPercent, deficiencyRatio };
+  }
+
   function getEffectiveRent(property) {
     if (!property) {
       return 0;
@@ -1507,13 +1575,10 @@ import {
       scheduleButton.type = "button";
       scheduleButton.className = "btn btn-outline-secondary";
       scheduleButton.textContent = "Schedule maintenance";
-      const baseValue = Number.isFinite(property.baseValue)
-        ? property.baseValue
-        : calculatePropertyValue(property);
-      const deficiencyRatio = Math.max(0, 100 - maintenancePercent) / 100;
-      const projectedCost = roundCurrency(
-        baseValue * (MAINTENANCE_CONFIG.refurbishmentCostRatio ?? 0.25) * deficiencyRatio
-      );
+      const tenantMonthsRemaining = getTenantMonthsRemaining(property);
+      const { projectedCost, projectedPercent } = estimateMaintenanceCost(property, {
+        delayMonths: tenantMonthsRemaining,
+      });
       const canSchedule =
         !isMaintenanceScheduled(property) && maintenancePercent < 100 && projectedCost <= state.balance;
       scheduleButton.disabled = !canSchedule;
@@ -1538,7 +1603,14 @@ import {
           projectedCost
         )}, but balance is insufficient.`;
       } else {
-        notes.textContent = `Estimated cost ${formatCurrency(projectedCost)} (paid upfront).`;
+        if (tenantMonthsRemaining > 0) {
+          const leaseLabel = formatLeaseCountdown(tenantMonthsRemaining);
+          notes.textContent = `Estimated cost ${formatCurrency(
+            projectedCost
+          )} (condition forecast to reach ${projectedPercent}% once work begins after ${leaseLabel}).`;
+        } else {
+          notes.textContent = `Estimated cost ${formatCurrency(projectedCost)} (paid upfront).`;
+        }
       }
       card.append(notes);
     } else {
@@ -3739,12 +3811,10 @@ import {
       return;
     }
 
-    const baseValue = Number.isFinite(property.baseValue)
-      ? property.baseValue
-      : calculatePropertyValue(property);
-    const deficiencyRatio = Math.max(0, 100 - currentPercent) / 100;
-    const costRatio = MAINTENANCE_CONFIG.refurbishmentCostRatio ?? 0.25;
-    const projectedCost = roundCurrency(baseValue * costRatio * deficiencyRatio);
+    const tenantMonthsRemaining = getTenantMonthsRemaining(property);
+    const { projectedCost, projectedPercent } = estimateMaintenanceCost(property, {
+      delayMonths: tenantMonthsRemaining,
+    });
 
     if (projectedCost > state.balance) {
       addHistoryEntry(
@@ -3752,13 +3822,6 @@ import {
       );
       return;
     }
-
-    const tenantMonthsRemaining = hasActiveTenant(property)
-      ? Math.max(
-          property.tenant?.leaseMonthsRemaining ?? property.leaseMonthsRemaining ?? 0,
-          0
-        )
-      : 0;
 
     property.maintenanceWork = {
       monthsRemaining: 1,
@@ -3770,7 +3833,7 @@ import {
     if (tenantMonthsRemaining > 0) {
       const leaseLabel = formatLeaseCountdown(tenantMonthsRemaining);
       addHistoryEntry(
-        `Scheduled maintenance for ${property.name}: work will begin once the current lease ends (${leaseLabel} remaining) and will require 1 month of vacancy (estimated cost ${formatCurrency(projectedCost)}).`
+        `Scheduled maintenance for ${property.name}: work will begin once the current lease ends (${leaseLabel} remaining) and will require 1 month of vacancy (estimated cost ${formatCurrency(projectedCost)} based on an expected condition of ${projectedPercent}%).`
       );
     } else {
       addHistoryEntry(
