@@ -118,8 +118,29 @@ import {
     return property.cost;
   }
 
+  function getMaintenanceStartDelay(property) {
+    if (!property?.maintenanceWork) {
+      return 0;
+    }
+    const delay = property.maintenanceWork.startDelayMonths;
+    if (!Number.isFinite(delay)) {
+      return 0;
+    }
+    return Math.max(delay, 0);
+  }
+
+  function isMaintenanceScheduled(property) {
+    return Boolean(property?.maintenanceWork);
+  }
+
   function isPropertyVacant(property) {
-    return (property?.maintenanceWork?.monthsRemaining ?? 0) > 0;
+    if (!property?.maintenanceWork) {
+      return false;
+    }
+    if (getMaintenanceStartDelay(property) > 0) {
+      return false;
+    }
+    return (property.maintenanceWork.monthsRemaining ?? 0) > 0;
   }
 
   function getMaintenanceThreshold() {
@@ -140,6 +161,9 @@ import {
       return false;
     }
     if (isPropertyVacant(property)) {
+      return false;
+    }
+    if (isMaintenanceScheduled(property)) {
       return false;
     }
     return !isMaintenanceBelowRentalThreshold(property);
@@ -476,9 +500,13 @@ import {
         ? `${Math.round((rentOption.probability ?? 0) * 100)}% monthly placement · ${rentOption.leaseMonths}-month lease · Base +${Math.round((rentOption.rateOffset ?? 0) * 100)}%`
         : "Target rent";
     const maintenancePercent = clampMaintenancePercent(property.maintenancePercent ?? 0);
-    const maintenanceDescription = property.maintenanceWork
-      ? "Maintenance scheduled"
-      : "Condition rating";
+    let maintenanceDescription = "Condition rating";
+    if (property.maintenanceWork) {
+      const delay = getMaintenanceStartDelay(property);
+      maintenanceDescription = delay > 0
+        ? "Maintenance scheduled after lease"
+        : "Maintenance scheduled";
+    }
 
     const statsContainer = document.createElement("div");
     statsContainer.className = "management-summary-stats";
@@ -626,6 +654,10 @@ import {
     const activeTenant = hasActiveTenant(property);
     const rentOption = findRentStrategyOption(property, property.askingRentOption);
     const maintenanceVacant = isPropertyVacant(property);
+    const maintenanceScheduled = isMaintenanceScheduled(property);
+    const maintenanceDelay = maintenanceScheduled
+      ? getMaintenanceStartDelay(property)
+      : 0;
     const maintenanceRestricted = isMaintenanceBelowRentalThreshold(property);
     const maintenanceThreshold = getMaintenanceThreshold();
 
@@ -643,6 +675,12 @@ import {
       const statusNotes = [];
       if (maintenanceVacant) {
         statusNotes.push("maintenance in progress");
+      } else if (maintenanceScheduled) {
+        statusNotes.push(
+          maintenanceDelay > 0
+            ? "maintenance scheduled after current lease"
+            : "maintenance scheduled"
+        );
       }
       if (maintenanceRestricted && !maintenanceVacant) {
         statusNotes.push(`maintenance below ${maintenanceThreshold}%`);
@@ -790,18 +828,25 @@ import {
       marketingButton.textContent = property.rentalMarketingActive
         ? "Pause advertising"
         : "List for rent";
-      marketingButton.disabled = maintenanceVacant || maintenanceRestricted;
+      const maintenanceHolding = maintenanceVacant || maintenanceScheduled;
+      marketingButton.disabled = maintenanceHolding || maintenanceRestricted;
       marketingButton.addEventListener("click", () => {
         handleMarketingToggle(property.id, !property.rentalMarketingActive);
         refreshManagementContext({ closeIfMissing: false });
       });
       controlsCard.append(marketingButton);
-      if (maintenanceVacant || maintenanceRestricted) {
+      if (maintenanceHolding || maintenanceRestricted) {
         const note = document.createElement("div");
         note.className = "management-note mt-2";
-        note.textContent = maintenanceVacant
-          ? "Advertising resumes once maintenance is complete."
-          : `Increase maintenance above ${maintenanceThreshold}% before advertising.`;
+        if (maintenanceVacant) {
+          note.textContent = "Advertising resumes once maintenance is complete.";
+        } else if (maintenanceRestricted) {
+          note.textContent = `Increase maintenance above ${maintenanceThreshold}% before advertising.`;
+        } else {
+          note.textContent = maintenanceDelay > 0
+            ? "Advertising will resume after the scheduled maintenance window following the current lease."
+            : "Advertising resumes once the scheduled maintenance is completed.";
+        }
         controlsCard.append(note);
       }
     }
@@ -1254,9 +1299,17 @@ import {
         const work = property.maintenanceWork;
         const workInfo = document.createElement("p");
         workInfo.className = "management-note mb-3";
-        workInfo.textContent = `Maintenance underway: ${work.monthsRemaining} month(s) remaining (cost ${formatCurrency(
-          work.cost ?? 0
-        )}). Property is temporarily vacant.`;
+        const delay = getMaintenanceStartDelay(property);
+        if (delay > 0) {
+          const leaseLabel = formatLeaseCountdown(delay);
+          workInfo.textContent = `Maintenance scheduled to begin after the current lease (${leaseLabel} remaining). Estimated downtime 1 month (cost ${formatCurrency(
+            work.cost ?? 0
+          )}).`;
+        } else {
+          workInfo.textContent = `Maintenance underway: ${work.monthsRemaining} month(s) remaining (cost ${formatCurrency(
+            work.cost ?? 0
+          )}). Property is temporarily vacant.`;
+        }
         card.append(workInfo);
       }
 
@@ -1272,7 +1325,7 @@ import {
         baseValue * (MAINTENANCE_CONFIG.refurbishmentCostRatio ?? 0.25) * deficiencyRatio
       );
       const canSchedule =
-        !isPropertyVacant(property) && maintenancePercent < 100 && projectedCost <= state.balance;
+        !isMaintenanceScheduled(property) && maintenancePercent < 100 && projectedCost <= state.balance;
       scheduleButton.disabled = !canSchedule;
       scheduleButton.addEventListener("click", () => {
         scheduleMaintenance(property.id);
@@ -1284,8 +1337,12 @@ import {
       notes.className = "management-note mt-3";
       if (maintenancePercent >= 100) {
         notes.textContent = "Property already at 100% maintenance.";
-      } else if (isPropertyVacant(property)) {
-        notes.textContent = "Maintenance already scheduled.";
+      } else if (isMaintenanceScheduled(property)) {
+        const delay = getMaintenanceStartDelay(property);
+        notes.textContent =
+          delay > 0
+            ? "Maintenance already scheduled to begin after the current lease."
+            : "Maintenance already scheduled.";
       } else if (projectedCost > state.balance) {
         notes.textContent = `Requires ${formatCurrency(
           projectedCost
@@ -1504,7 +1561,17 @@ import {
         property.tenant = null;
         property.monthlyRent = 0;
         property.leaseMonthsRemaining = 0;
-        if (property.autoRelist) {
+        if (isMaintenanceScheduled(property)) {
+          property.rentalMarketingActive = false;
+          property.vacancyMonths = 0;
+          property.rentalMarketingPausedForMaintenance = true;
+          if (property.autoRelist) {
+            events.push({
+              type: "autoRelistDeferredMaintenance",
+              property,
+            });
+          }
+        } else if (property.autoRelist) {
           property.rentalMarketingActive = true;
           property.vacancyMonths = 0;
           events.push({
@@ -1622,6 +1689,25 @@ import {
       );
 
       rentCollected += progressPropertyTenancy(property, tenancyEvents);
+
+      if (property.maintenanceWork) {
+        const work = property.maintenanceWork;
+        const delay = getMaintenanceStartDelay(property);
+        if (delay > 0) {
+          work.startDelayMonths = delay - 1;
+          if (work.startDelayMonths <= 0) {
+            work.startDelayMonths = 0;
+            work.monthsRemaining = Math.max(work.monthsRemaining ?? 1, 1);
+            property.rentalMarketingActive = false;
+            property.vacancyMonths = 0;
+            property.rentalMarketingPausedForMaintenance = true;
+            tenancyEvents.push({
+              type: "maintenanceBegan",
+              property,
+            });
+          }
+        }
+      }
 
       if (underMaintenance && property.maintenanceWork) {
         property.maintenanceWork.monthsRemaining = Math.max(
@@ -2655,6 +2741,12 @@ import {
               addHistoryEntry(summary);
               break;
             }
+            case "autoRelistDeferredMaintenance": {
+              addHistoryEntry(
+                `Auto-relisting paused for ${event.property.name}: maintenance has been scheduled to begin after the current lease.`
+              );
+              break;
+            }
             case "marketingPausedMaintenance": {
               const maintenanceLabel = `${(event.maintenancePercent ?? 0).toFixed(1)}%`;
               addHistoryEntry(
@@ -2666,6 +2758,12 @@ import {
               const maintenanceLabel = `${(event.maintenancePercent ?? 0).toFixed(1)}%`;
               addHistoryEntry(
                 `Resumed advertising for ${event.property.name}: maintenance improved to ${maintenanceLabel}, clearing the ${event.threshold}%.`
+              );
+              break;
+            }
+            case "maintenanceBegan": {
+              addHistoryEntry(
+                `Maintenance work began on ${event.property.name}. Property unavailable for tenants until work completes.`
               );
               break;
             }
@@ -3243,7 +3341,7 @@ import {
       return;
     }
 
-    if (isPropertyVacant(property)) {
+    if (isMaintenanceScheduled(property)) {
       addHistoryEntry(
         `${property.name} already has maintenance scheduled.`
       );
@@ -3270,15 +3368,30 @@ import {
       return;
     }
 
+    const tenantMonthsRemaining = hasActiveTenant(property)
+      ? Math.max(
+          property.tenant?.leaseMonthsRemaining ?? property.leaseMonthsRemaining ?? 0,
+          0
+        )
+      : 0;
+
     property.maintenanceWork = {
       monthsRemaining: 1,
       cost: projectedCost,
       scheduledOnDay: state.day,
+      startDelayMonths: tenantMonthsRemaining,
     };
 
-    addHistoryEntry(
-      `Scheduled maintenance for ${property.name}: property will be vacant for 1 month (estimated cost ${formatCurrency(projectedCost)}).`
-    );
+    if (tenantMonthsRemaining > 0) {
+      const leaseLabel = formatLeaseCountdown(tenantMonthsRemaining);
+      addHistoryEntry(
+        `Scheduled maintenance for ${property.name}: work will begin once the current lease ends (${leaseLabel} remaining) and will require 1 month of vacancy (estimated cost ${formatCurrency(projectedCost)}).`
+      );
+    } else {
+      addHistoryEntry(
+        `Scheduled maintenance for ${property.name}: property will be vacant for 1 month (estimated cost ${formatCurrency(projectedCost)}).`
+      );
+    }
     updateUI();
   }
 
@@ -3851,8 +3964,12 @@ import {
       const maintenanceLabel = document.createElement("div");
       maintenanceLabel.className = "small text-muted mb-1";
       const maintenanceNotes = [];
-      if (isPropertyVacant(property)) {
-        maintenanceNotes.push("maintenance scheduled");
+      if (property.maintenanceWork) {
+        maintenanceNotes.push(
+          getMaintenanceStartDelay(property) > 0
+            ? "maintenance scheduled after lease"
+            : "maintenance scheduled"
+        );
       }
       if (isMaintenanceBelowRentalThreshold(property)) {
         maintenanceNotes.push(`below ${getMaintenanceThreshold()}% (leasing paused)`);
