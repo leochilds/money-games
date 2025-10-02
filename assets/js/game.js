@@ -3568,6 +3568,8 @@ import {
     mortgage.monthlyInterestRate = monthlyRate;
     mortgage.variableRateMargin = profile.variableRateMargin;
     mortgage.reversionRate = profile.reversionRate;
+    mortgage.termMonths = remainingTermMonths;
+    mortgage.termYears = Math.max(remainingTermMonths / 12, 1 / 12);
     mortgage.fixedPeriodYears = fixedYearsResolved;
     mortgage.fixedPeriodMonths = fixedPeriodMonths;
     mortgage.monthlyPayment = monthlyPayment;
