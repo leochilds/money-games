@@ -1869,8 +1869,9 @@ import {
       ensurePropertyRentSettings(property);
       const currentPercent =
         property.maintenancePercent ?? getInitialMaintenancePercent();
-      const underMaintenance = isPropertyVacant(property);
-      const decayRate = underMaintenance
+      const propertyVacant = isPropertyVacant(property);
+      const tenantActive = hasActiveTenant(property);
+      const decayRate = propertyVacant || !tenantActive
         ? MAINTENANCE_CONFIG.unoccupiedDecayPerMonth ?? 0
         : MAINTENANCE_CONFIG.occupiedDecayPerMonth ?? 0;
 
@@ -1899,7 +1900,7 @@ import {
         }
       }
 
-      if (underMaintenance && property.maintenanceWork) {
+      if (propertyVacant && property.maintenanceWork) {
         property.maintenanceWork.monthsRemaining = Math.max(
           (property.maintenanceWork.monthsRemaining ?? 0) - 1,
           0
