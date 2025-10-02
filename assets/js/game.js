@@ -1983,9 +1983,24 @@ import {
     },
   };
 
+  const uiState = {
+    dirty: {
+      market: true,
+      income: true,
+    },
+  };
+
   let managementModalInstance = null;
 
   let generatedIdCounter = 1;
+
+  function markMarketDirty() {
+    uiState.dirty.market = true;
+  }
+
+  function markIncomeDirty() {
+    uiState.dirty.income = true;
+  }
 
   function generateUniquePropertyId() {
     const usedIds = new Set([
@@ -2109,8 +2124,11 @@ import {
       newListings.push(property);
     }
 
-    if (newListings.length > 0 && shouldUpdateUI) {
-      updateUI();
+    if (newListings.length > 0) {
+      markMarketDirty();
+      if (shouldUpdateUI) {
+        updateUI({ refreshMarket: true });
+      }
     }
 
     return newListings;
@@ -2173,7 +2191,7 @@ import {
     }
 
     if (marketChanged) {
-      updateUI();
+      markMarketDirty();
     }
 
     return marketChanged;
@@ -2776,7 +2794,9 @@ import {
     } else {
       renderHistory();
     }
-    updateUI();
+    markMarketDirty();
+    markIncomeDirty();
+    updateUI({ refreshMarket: true, refreshIncome: true });
     restartTimer();
   }
 
@@ -2885,11 +2905,15 @@ import {
 
   function handleDayTick() {
     state.day += 1;
+    let marketChanged = false;
+    let portfolioChanged = false;
     const rateChanged = adjustCentralBankRateIfNeeded();
     const daysSinceLastCollection = state.day - state.lastRentCollectionDay;
     const monthsElapsed = Math.floor(daysSinceLastCollection / 30);
 
     if (monthsElapsed > 0) {
+      marketChanged = true;
+      portfolioChanged = true;
       let rentCollected = 0;
       const maintenanceCompletions = [];
       const tenancyEvents = [];
@@ -3031,9 +3055,21 @@ import {
 
     const marketUpdated = progressMarketListings();
 
-    if (!marketUpdated || rateChanged) {
-      updateUI();
+    if (marketUpdated) {
+      marketChanged = true;
     }
+
+    if (marketChanged) {
+      markMarketDirty();
+    }
+    if (portfolioChanged) {
+      markIncomeDirty();
+    }
+
+    updateUI({
+      refreshMarket: marketChanged || rateChanged,
+      refreshIncome: portfolioChanged,
+    });
   }
 
   function calculateRentPerMonth() {
@@ -3224,7 +3260,8 @@ import {
     settings,
     { scope, updateUI: shouldUpdateUI = true } = {}
   ) {
-    const collection = scope === "portfolio" ? state.portfolio : state.market;
+    const effectiveScope = scope === "portfolio" ? "portfolio" : "market";
+    const collection = effectiveScope === "portfolio" ? state.portfolio : state.market;
     const property = collection.find((item) => item.id === propertyId);
     if (!property) {
       return null;
@@ -3253,7 +3290,7 @@ import {
       property.vacancyMonths = 0;
     }
 
-    if (scope === "portfolio") {
+    if (effectiveScope === "portfolio") {
       const chance = Math.round((option.probability ?? 0) * 100);
       const rateLabel = `base +${Math.round(option.rateOffset * 100)}%`;
       const leaseLabel = `${option.leaseMonths}-month lease`;
@@ -3265,15 +3302,26 @@ import {
       );
     }
 
+    if (effectiveScope === "portfolio") {
+      markIncomeDirty();
+    } else {
+      markMarketDirty();
+    }
+
     if (shouldUpdateUI) {
-      updateUI();
+      if (effectiveScope === "portfolio") {
+        updateUI({ refreshIncome: true });
+      } else {
+        updateUI({ refreshMarket: true });
+      }
     }
 
     return option;
   }
 
   function handleAutoRelistToggle(propertyId, enabled, { scope } = {}) {
-    const collection = scope === "portfolio" ? state.portfolio : state.market;
+    const effectiveScope = scope === "portfolio" ? "portfolio" : "market";
+    const collection = effectiveScope === "portfolio" ? state.portfolio : state.market;
     const property = collection.find((item) => item.id === propertyId);
     if (!property) {
       return;
@@ -3281,7 +3329,7 @@ import {
 
     property.autoRelist = Boolean(enabled);
 
-    if (scope === "portfolio") {
+    if (effectiveScope === "portfolio") {
       if (enabled && !hasActiveTenant(property) && !property.rentalMarketingActive) {
         const started = startRentalMarketing(property);
         if (started) {
@@ -3304,11 +3352,15 @@ import {
         stopRentalMarketing(property);
         addHistoryEntry(`Auto-relisting disabled for ${property.name}.`);
       }
-      updateUI();
-      return;
     }
 
-    updateUI();
+    if (effectiveScope === "portfolio") {
+      markIncomeDirty();
+      updateUI({ refreshIncome: true });
+    } else {
+      markMarketDirty();
+      updateUI({ refreshMarket: true });
+    }
   }
 
   function handleMarketingToggle(propertyId, shouldMarket) {
@@ -3338,7 +3390,8 @@ import {
       addHistoryEntry(`Paused advertising for ${property.name}.`);
     }
 
-    updateUI();
+    markIncomeDirty();
+    updateUI({ refreshIncome: true });
   }
 
   function preparePurchasedProperty(property, { mortgage = null } = {}) {
@@ -3420,7 +3473,9 @@ import {
         )} remaining).`
       );
     }
-    updateUI();
+    markMarketDirty();
+    markIncomeDirty();
+    updateUI({ refreshMarket: true, refreshIncome: true });
   }
 
   function handleMortgagePurchase(
@@ -3494,7 +3549,9 @@ import {
         )} remaining).`
       );
     }
-    updateUI();
+    markMarketDirty();
+    markIncomeDirty();
+    updateUI({ refreshMarket: true, refreshIncome: true });
     return true;
   }
 
@@ -3601,7 +3658,8 @@ import {
       );
     }
 
-    updateUI();
+    markIncomeDirty();
+    updateUI({ refreshIncome: true });
     return true;
   }
 
@@ -3657,7 +3715,8 @@ import {
       addHistoryEntry(`Sold ${property.name} for ${formatCurrency(salePrice)}.`);
     }
     state.balance = roundCurrency(state.balance);
-    updateUI();
+    markIncomeDirty();
+    updateUI({ refreshIncome: true });
   }
 
   function scheduleMaintenance(propertyId) {
@@ -3717,7 +3776,8 @@ import {
         `Scheduled maintenance for ${property.name}: property will be vacant for 1 month (estimated cost ${formatCurrency(projectedCost)}).`
       );
     }
-    updateUI();
+    markIncomeDirty();
+    updateUI({ refreshIncome: true });
   }
 
   function renderProperties() {
@@ -4487,7 +4547,7 @@ import {
     }
   }
 
-  function updateUI() {
+  function updateUI({ refreshMarket, refreshIncome } = {}) {
     elements.balance.textContent = formatCurrency(state.balance);
     elements.day.textContent = state.day.toString();
     if (elements.centralBankRate) {
@@ -4499,8 +4559,20 @@ import {
     elements.rentPerMonth.innerHTML = `${formatCurrency(netCashflow)} <small class="text-muted">(rent ${formatCurrency(
       grossRent
     )} - mortgages ${formatCurrency(mortgageOutgoings)})</small>`;
-    renderProperties();
-    renderIncomeStatus();
+    const shouldRenderMarket =
+      typeof refreshMarket === "boolean" ? refreshMarket : uiState.dirty.market;
+    if (shouldRenderMarket) {
+      renderProperties();
+      uiState.dirty.market = false;
+    }
+
+    const shouldRenderIncome =
+      typeof refreshIncome === "boolean" ? refreshIncome : uiState.dirty.income;
+    if (shouldRenderIncome) {
+      renderIncomeStatus();
+      uiState.dirty.income = false;
+    }
+
     renderHistory();
     updatePauseUI();
   }
