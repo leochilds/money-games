@@ -200,14 +200,6 @@ import {
     if (typeof optionKey !== "string") {
       return null;
     }
-    const legacyPresets = {
-      value: { leaseMonths: 12, rateOffset: 0.02 },
-      market: { leaseMonths: 12, rateOffset: 0.05 },
-      premium: { leaseMonths: 12, rateOffset: 0.08 },
-    };
-    if (legacyPresets[optionKey]) {
-      return legacyPresets[optionKey];
-    }
     const match = /^lease-(\d+)-rate-(\d+)$/.exec(optionKey);
     if (!match) {
       return null;
@@ -291,9 +283,9 @@ import {
       : 0;
 
     let leaseFactor = 1;
-    if (rateOffset <= 0.05 + 1e-6) {
+    if (rateOffset < 0.05) {
       leaseFactor += (leaseRatio - 0.5) * 0.4;
-    } else if (rateOffset >= 0.06 - 1e-6) {
+    } else if (rateOffset > 0.06) {
       leaseFactor += (0.5 - leaseRatio) * 0.4;
     }
 
