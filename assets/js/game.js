@@ -4305,275 +4305,33 @@ import {
 
     ownedProperties.forEach((property) => {
       const item = document.createElement("li");
-      item.className =
-        "list-group-item d-flex flex-column flex-sm-row align-items-sm-center gap-3";
+      item.className = "list-group-item d-flex flex-column gap-2";
 
-      const info = document.createElement("div");
-      info.className = "flex-grow-1";
+      const topRow = document.createElement("div");
+      topRow.className =
+        "d-flex flex-wrap align-items-center justify-content-between gap-2";
 
-      const nameElement = document.createElement("div");
-      nameElement.className = "fw-semibold d-flex flex-wrap align-items-center gap-2";
+      const titleGroup = document.createElement("div");
+      titleGroup.className = "d-flex align-items-center gap-2";
+
       const nameText = document.createElement("span");
+      nameText.className = "fw-semibold";
       nameText.textContent = property.name;
-      nameElement.append(nameText);
-      const mortgage = property.mortgage;
-      if (mortgage?.variableRateActive) {
-        item.classList.add("variable-rate-mortgage");
-        const variableBadge = document.createElement("span");
-        variableBadge.className = "badge badge-variable-rate text-uppercase";
-        variableBadge.textContent = "Variable rate";
-        nameElement.append(variableBadge);
-      }
-      info.append(nameElement);
 
-      const tenantStatusWrapper = document.createElement("div");
-      tenantStatusWrapper.className = "d-flex flex-wrap gap-2 mb-2";
       const activeTenant = hasActiveTenant(property);
-      if (activeTenant) {
-        const remainingLabel = property.leaseMonthsRemaining > 0
-          ? ` (${formatLeaseCountdown(property.leaseMonthsRemaining)} remaining)`
-          : "";
-        tenantStatusWrapper.append(
-          createStatusChip(`Occupied${remainingLabel}`, "bg-success")
-        );
-        if (property.tenant?.inherited) {
-          tenantStatusWrapper.append(
-            createStatusChip("Inherited lease", "bg-info text-dark")
-          );
-        }
-      } else {
-        tenantStatusWrapper.append(createStatusChip("Vacant", "bg-secondary"));
-        if (property.rentalMarketingActive) {
-          tenantStatusWrapper.append(
-            createStatusChip("Advertising", "bg-warning text-dark")
-          );
-        } else {
-          tenantStatusWrapper.append(
-            createStatusChip("Idle", "bg-light text-muted border")
-          );
-        }
-        tenantStatusWrapper.append(
-          createStatusChip(
-            property.autoRelist ? "Auto-relist on" : "Auto-relist off",
-            property.autoRelist ? "bg-success" : "bg-light text-muted border"
-          )
-        );
-      }
-      info.append(tenantStatusWrapper);
+      const occupancyBadge = document.createElement("span");
+      occupancyBadge.className = `badge rounded-pill ${activeTenant ? "bg-success" : "bg-secondary"}`;
+      occupancyBadge.textContent = activeTenant ? "Occupied" : "Vacant";
 
-      if (property.description) {
-        const descriptionElement = document.createElement("small");
-        descriptionElement.className = "d-block text-muted";
-        descriptionElement.textContent = property.description;
-        info.append(descriptionElement);
-      }
+      titleGroup.append(nameText, occupancyBadge);
 
-      const rentOption = findRentStrategyOption(property, property.askingRentOption);
-      const activeRentAmount = getEffectiveRent(property);
-      const targetRentAmount = rentOption?.monthlyRent ?? 0;
-      const tenancyDetails = document.createElement("div");
-      tenancyDetails.className = "small mb-2";
-      const formatPortfolioRentMeta = (option) => {
-        const chance = Number.isFinite(option?.probability)
-          ? `${Math.round((option.probability ?? 0) * 100)}%`
-          : "-";
-        const leaseMonths = option?.leaseMonths ?? 0;
-        const rateLabel = option
-          ? ` · Base +${Math.round((option.rateOffset ?? 0) * 100)}%`
-          : "";
-        return ` · ${chance} monthly placement · ${leaseMonths}-month lease${rateLabel}`;
-      };
-      let portfolioRentValueNode = null;
-      let portfolioRentMetaNode = null;
-      if (activeTenant) {
-        tenancyDetails.innerHTML = `<strong>Current rent:</strong> ${formatCurrency(
-          property.tenant.rent
-        )} (lease ${formatLeaseCountdown(property.leaseMonthsRemaining)} remaining)`;
-      } else {
-        const tenancyLabel = document.createElement("strong");
-        tenancyLabel.textContent = "Target rent:";
-        portfolioRentValueNode = document.createElement("span");
-        portfolioRentValueNode.textContent = formatCurrency(targetRentAmount);
-        portfolioRentMetaNode = document.createElement("span");
-        portfolioRentMetaNode.textContent = formatPortfolioRentMeta(rentOption);
-        tenancyDetails.append(
-          tenancyLabel,
-          document.createTextNode(" "),
-          portfolioRentValueNode,
-          portfolioRentMetaNode
-        );
-      }
-      info.append(tenancyDetails);
+      const actionGroup = document.createElement("div");
+      actionGroup.className = "d-flex align-items-center gap-2";
 
-      const maintenancePercent = clampMaintenancePercent(
-        property.maintenancePercent ?? 0
-      );
-      const maintenanceBlock = document.createElement("div");
-      maintenanceBlock.className = "maintenance-status";
-      const maintenanceLabel = document.createElement("div");
-      maintenanceLabel.className = "small text-muted mb-1";
-      const maintenanceNotes = [];
-      if (property.maintenanceWork) {
-        maintenanceNotes.push(
-          getMaintenanceStartDelay(property) > 0
-            ? "maintenance scheduled after lease"
-            : "maintenance scheduled"
-        );
-      }
-      if (isMaintenanceBelowRentalThreshold(property)) {
-        maintenanceNotes.push(`below ${getMaintenanceThreshold()}% (leasing paused)`);
-      }
-      const notesSuffix = maintenanceNotes.length
-        ? ` (${maintenanceNotes.join(", ")})`
-        : "";
-      maintenanceLabel.innerHTML = `<strong>Maintenance:</strong> ${maintenancePercent}% condition${notesSuffix}`;
-      const maintenanceProgress = document.createElement("div");
-      maintenanceProgress.className = "progress maintenance-progress";
-      const maintenanceProgressBar = document.createElement("div");
-      maintenanceProgressBar.className = "progress-bar";
-      maintenanceProgressBar.role = "progressbar";
-      maintenanceProgressBar.style.width = `${maintenancePercent}%`;
-      maintenanceProgressBar.setAttribute("aria-valuenow", maintenancePercent.toString());
-      maintenanceProgressBar.setAttribute("aria-valuemin", "0");
-      maintenanceProgressBar.setAttribute("aria-valuemax", "100");
-      maintenanceProgressBar.textContent = `${maintenancePercent}%`;
-      maintenanceProgress.append(maintenanceProgressBar);
-      maintenanceBlock.append(maintenanceLabel, maintenanceProgress);
-      info.append(maintenanceBlock);
-
-      const cashflowDetails = document.createElement("div");
-      cashflowDetails.className = "small text-muted";
-      let mortgageBreakdown = null;
-      if (mortgage) {
-        mortgageBreakdown = getMortgagePaymentBreakdown(mortgage);
-        const breakdown = mortgageBreakdown;
-        const fixedTotals = breakdown.fixedPeriod ?? {};
-        const variablePhase = breakdown.variablePhase ?? {};
-
-        const formatCountdown = (months) => {
-          if (!Number.isFinite(months) || months <= 0) {
-            return "0 months";
-          }
-          const wholeMonths = Math.round(months);
-          const years = Math.floor(wholeMonths / 12);
-          const remainingMonths = wholeMonths % 12;
-          const parts = [];
-          if (years > 0) {
-            parts.push(`${years} year${years === 1 ? "" : "s"}`);
-          }
-          if (remainingMonths > 0 || parts.length === 0) {
-            parts.push(`${remainingMonths} month${remainingMonths === 1 ? "" : "s"}`);
-          }
-          return parts.join(" ");
-        };
-
-        const summaryLine = document.createElement("div");
-        const rentDescriptor = activeTenant
-          ? `Rent ${formatCurrency(activeRentAmount)}`
-          : `Vacant (target ${formatCurrency(rentOption?.monthlyRent ?? 0)})`;
-        if (breakdown.isInterestOnly) {
-          summaryLine.textContent = `${rentDescriptor} · Interest-only ${formatCurrency(
-            breakdown.monthlyPayment
-          )} / month`;
-        } else {
-          summaryLine.textContent = `${rentDescriptor} · Mortgage ${formatCurrency(
-            breakdown.monthlyPayment
-          )} / month`;
-        }
-
-        const principalLine = document.createElement("div");
-        if (breakdown.isInterestOnly) {
-          principalLine.textContent = `Principal outstanding: ${formatCurrency(
-            breakdown.principalRemaining
-          )} (due after interest-only term)`;
-        } else {
-          principalLine.textContent = `Principal remaining: ${formatCurrency(
-            breakdown.principalRemaining
-          )}`;
-        }
-
-        const fixedPeriodLine = document.createElement("div");
-        if (breakdown.isInterestOnly) {
-          if ((fixedTotals.paymentsRemaining ?? 0) > 0) {
-            const plural = fixedTotals.paymentsRemaining === 1 ? "" : "s";
-            fixedPeriodLine.textContent = `Fixed period: ${fixedTotals.paymentsRemaining} payment${plural} left (${formatCurrency(
-              fixedTotals.totalPaymentsRemaining ?? 0
-            )} interest remaining).`;
-          } else {
-            fixedPeriodLine.textContent = `Interest-only fixed period complete; principal will roll onto variable terms.`;
-          }
-        } else if ((fixedTotals.paymentsRemaining ?? 0) > 0) {
-          const plural = fixedTotals.paymentsRemaining === 1 ? "" : "s";
-          fixedPeriodLine.textContent = `Fixed period: ${fixedTotals.paymentsRemaining} payment${plural} left (${formatCurrency(
-            fixedTotals.totalPrincipalScheduled ?? 0
-          )} principal + ${formatCurrency(fixedTotals.totalInterestRemaining ?? 0)} interest).`;
-        } else {
-          fixedPeriodLine.textContent = `Fixed period finished; ${formatCurrency(
-            fixedTotals.projectedBalanceAfter ?? breakdown.principalRemaining
-          )} principal continues on variable rate.`;
-        }
-
-        const paymentSplitLine = document.createElement("div");
-        if (breakdown.isInterestOnly) {
-          paymentSplitLine.textContent = `This month's payment: ${formatCurrency(
-            breakdown.interestComponent
-          )} interest-only`;
-        } else {
-          paymentSplitLine.textContent = `This month's payment: ${formatCurrency(
-            breakdown.principalComponent
-          )} principal + ${formatCurrency(breakdown.interestComponent)} interest`;
-        }
-
-        const variableLine = document.createElement("div");
-        const baseRate = Number.isFinite(variablePhase.baseRate) ? variablePhase.baseRate : 0;
-        const margin = Number.isFinite(variablePhase.margin) ? variablePhase.margin : 0;
-        const reversionRate = Number.isFinite(variablePhase.reversionRate)
-          ? variablePhase.reversionRate
-          : baseRate + margin;
-        const estimatedPayment = variablePhase.estimatedPayment ?? 0;
-
-        if (variablePhase.isActive) {
-          let message = `Variable margin active at ${(reversionRate * 100).toFixed(2)}% (${(baseRate * 100).toFixed(2)}% base + ${(margin * 100).toFixed(2)}% margin).`;
-          if (estimatedPayment > 0) {
-            message += ` Estimated payment ${formatCurrency(estimatedPayment)} / month.`;
-          }
-          variableLine.textContent = message;
-        } else if ((variablePhase.startsInMonths ?? 0) > 0) {
-          const countdownLabel = formatCountdown(variablePhase.startsInMonths ?? 0);
-          let message = `Variable rate ${(reversionRate * 100).toFixed(2)}% begins in ${countdownLabel} (${(baseRate * 100).toFixed(2)}% base + ${(margin * 100).toFixed(2)}% margin).`;
-          if (estimatedPayment > 0) {
-            message += ` Estimated payment ${formatCurrency(estimatedPayment)} / month.`;
-          }
-          variableLine.textContent = message;
-        } else {
-          variableLine.textContent = `Variable margin available at ${(reversionRate * 100).toFixed(2)}% (${(baseRate * 100).toFixed(2)}% base + ${(margin * 100).toFixed(2)}% margin).`;
-        }
-
-        cashflowDetails.append(
-          summaryLine,
-          principalLine,
-          fixedPeriodLine,
-          paymentSplitLine,
-          variableLine
-        );
-      } else {
-        const summaryLine = document.createElement("div");
-        const rentDescriptor = activeTenant
-          ? `Rent ${formatCurrency(activeRentAmount)}`
-          : `Vacant (target ${formatCurrency(rentOption?.monthlyRent ?? 0)})`;
-        summaryLine.textContent = `${rentDescriptor} · No mortgage obligations`;
-        cashflowDetails.append(summaryLine);
-      }
-      info.append(cashflowDetails);
-
-      const actionWrapper = document.createElement("div");
-      actionWrapper.className =
-        "d-flex flex-column flex-sm-row align-items-sm-center gap-2 ms-sm-auto text-sm-end";
-
-      const rentBadge = document.createElement("span");
       const netCash = calculateNetCashForProperty(property);
-      rentBadge.className = `badge ${netCash >= 0 ? "bg-success" : "bg-danger"} rounded-pill`;
-      rentBadge.textContent = `Net / month: ${formatCurrency(netCash)}`;
+      const netBadge = document.createElement("span");
+      netBadge.className = `badge ${netCash >= 0 ? "bg-success" : "bg-danger"} rounded-pill`;
+      netBadge.textContent = `Net / month: ${formatCurrency(netCash)}`;
 
       const manageButton = document.createElement("button");
       manageButton.type = "button";
@@ -4584,9 +4342,36 @@ import {
         openManagementModal(property.id, "portfolio");
       });
 
-      actionWrapper.append(rentBadge, manageButton);
+      actionGroup.append(netBadge, manageButton);
+      topRow.append(titleGroup, actionGroup);
 
-      item.append(info, actionWrapper);
+      const rentSummary = document.createElement("div");
+      rentSummary.className = "small text-muted";
+      const rentOption = findRentStrategyOption(property, property.askingRentOption);
+      if (activeTenant) {
+        const leaseRemaining = getTenantMonthsRemaining(property);
+        rentSummary.textContent = `Rent ${formatCurrency(property.tenant?.rent ?? 0)} / month · Lease ${formatLeaseCountdown(leaseRemaining)} remaining`;
+      } else {
+        rentSummary.textContent = `Vacant · Target rent ${formatCurrency(rentOption?.monthlyRent ?? 0)} / month`;
+      }
+
+      const mortgage = property.mortgage;
+      if (mortgage?.remainingBalance > 0.5) {
+        const financeLine = document.createElement("div");
+        financeLine.className = "small";
+        const paymentLabel = mortgage.interestOnly ? "Interest-only payment" : "Mortgage payment";
+        const monthlyPayment = getNextMortgagePayment(mortgage);
+        const monthsRemaining = Math.max(Math.round(mortgage.remainingTermMonths ?? 0), 0);
+        const monthsDescriptor =
+          monthsRemaining > 0
+            ? ` · ${monthsRemaining} month${monthsRemaining === 1 ? "" : "s"} remaining`
+            : "";
+        financeLine.textContent = `${paymentLabel} ${formatCurrency(monthlyPayment)} / month · Balance ${formatCurrency(mortgage.remainingBalance)}${monthsDescriptor}`;
+        item.append(topRow, rentSummary, financeLine);
+      } else {
+        item.append(topRow, rentSummary);
+      }
+
       elements.incomeStatus.append(item);
     });
   }
