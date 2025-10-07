@@ -71,3 +71,20 @@ export function formatInterestRate(value: number): string {
   }
   return `${(value * 100).toFixed(2)}%`;
 }
+
+export function formatLeaseCountdown(months: number): string {
+  if (!Number.isFinite(months) || months <= 0) {
+    return '0 months';
+  }
+  const rounded = Math.round(months);
+  const years = Math.floor(rounded / 12);
+  const remainingMonths = rounded % 12;
+  const parts: string[] = [];
+  if (years > 0) {
+    parts.push(`${years} year${years === 1 ? '' : 's'}`);
+  }
+  if (remainingMonths > 0 || parts.length === 0) {
+    parts.push(`${remainingMonths} month${remainingMonths === 1 ? '' : 's'}`);
+  }
+  return parts.join(' ');
+}

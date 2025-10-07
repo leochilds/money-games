@@ -8,7 +8,13 @@ import {
   type PropertyDefinition
 } from '$lib/config';
 import type { HistoryEntry, PropertyCard, RentalItem } from '$lib/types';
-import { formatCurrency, formatInterestRate, formatPercentage, formatPropertyType } from '$lib/utils';
+import {
+  formatCurrency,
+  formatInterestRate,
+  formatLeaseCountdown,
+  formatPercentage,
+  formatPropertyType
+} from '$lib/utils';
 
 type RentPlan = {
   id: string;
@@ -36,6 +42,13 @@ type Mortgage = {
   remainingTermMonths: number;
 };
 
+type MaintenanceWorkOrder = {
+  monthsRemaining: number;
+  cost: number;
+  scheduledOnDay: number;
+  startDelayMonths: number;
+};
+
 type GameProperty = PropertyDefinition & {
   baseValue: number;
   cost: number;
@@ -46,6 +59,7 @@ type GameProperty = PropertyDefinition & {
   mortgage: Mortgage | null;
   autoRelist: boolean;
   rentalMarketingPausedForMaintenance: boolean;
+  maintenanceWork: MaintenanceWorkOrder | null;
 };
 
 export type ManagementLeasingControls = {
@@ -89,6 +103,24 @@ type ManagementState = {
   activeSection: 'overview' | 'leasing' | 'financing' | 'transactions' | 'maintenance';
 };
 
+export type ManagementMaintenanceState = {
+  maintenancePercent: number;
+  projectedCost: number;
+  projectedPercent: number;
+  tenantMonthsRemaining: number;
+  leaseCountdownLabel: string | null;
+  work: MaintenanceWorkOrder | null;
+  workDelayMonths: number;
+  workIsActive: boolean;
+  maintenanceThreshold: number;
+  canSchedule: boolean;
+  reasons: {
+    atMaxMaintenance: boolean;
+    alreadyScheduled: boolean;
+    insufficientFunds: boolean;
+  };
+};
+
 type GameState = {
   balance: number;
   day: number;
@@ -122,6 +154,26 @@ function createEmptyLeasingControls(): ManagementLeasingControls {
     autoRelist: false,
     marketingPaused: false,
     hasTenant: false
+  };
+}
+
+export function createEmptyMaintenanceState(): ManagementMaintenanceState {
+  return {
+    maintenancePercent: 0,
+    projectedCost: 0,
+    projectedPercent: 0,
+    tenantMonthsRemaining: 0,
+    leaseCountdownLabel: null,
+    work: null,
+    workDelayMonths: 0,
+    workIsActive: false,
+    maintenanceThreshold: MAINTENANCE_CONFIG.criticalThreshold,
+    canSchedule: false,
+    reasons: {
+      atMaxMaintenance: false,
+      alreadyScheduled: false,
+      insufficientFunds: false
+    }
   };
 }
 
@@ -183,6 +235,57 @@ function calculateMonthlyRentEstimate(cost: number, demandScore: number): number
   return Math.max(Math.round(baseRent + demandPremium), 0);
 }
 
+function getTenantMonthsRemaining(property: GameProperty): number {
+  const remaining = property.tenant?.leaseMonthsRemaining ?? 0;
+  if (!Number.isFinite(remaining)) {
+    return 0;
+  }
+  return Math.max(Math.round(remaining), 0);
+}
+
+function forecastMaintenancePercent(
+  property: GameProperty,
+  options: { maintenancePercent?: number; delayMonths?: number } = {}
+): number {
+  const { maintenancePercent, delayMonths } = options;
+  let baseCandidate: number;
+  if (Number.isFinite(maintenancePercent)) {
+    baseCandidate = maintenancePercent ?? 0;
+  } else if (Number.isFinite(property.maintenancePercent)) {
+    baseCandidate = property.maintenancePercent;
+  } else {
+    const [minPercent, maxPercent] = MAINTENANCE_CONFIG.initialPercentRange;
+    baseCandidate = Number.isFinite(maxPercent)
+      ? maxPercent
+      : Number.isFinite(minPercent)
+        ? minPercent
+        : 100;
+  }
+  const currentPercent = clampMaintenancePercent(baseCandidate);
+  const delay = Number.isFinite(delayMonths) ? Math.max(delayMonths ?? 0, 0) : getTenantMonthsRemaining(property);
+  if (delay <= 0) {
+    return currentPercent;
+  }
+  const occupiedDecay = MAINTENANCE_CONFIG.occupiedDecayPerMonth ?? 0;
+  const projected = currentPercent - occupiedDecay * delay;
+  return clampMaintenancePercent(projected);
+}
+
+function estimateMaintenanceCost(
+  property: GameProperty,
+  options: { delayMonths?: number } = {}
+): { baseValue: number; projectedCost: number; projectedPercent: number; deficiencyRatio: number } {
+  if (!property) {
+    return { baseValue: 0, projectedCost: 0, projectedPercent: 0, deficiencyRatio: 0 };
+  }
+  const baseValue = Number.isFinite(property.baseValue) ? property.baseValue : calculatePropertyValue(property);
+  const projectedPercent = forecastMaintenancePercent(property, { delayMonths: options.delayMonths });
+  const deficiencyRatio = Math.max(0, 100 - projectedPercent) / 100;
+  const costRatio = MAINTENANCE_CONFIG.refurbishmentCostRatio ?? 0.25;
+  const projectedCost = Math.round(baseValue * costRatio * deficiencyRatio);
+  return { baseValue, projectedCost, projectedPercent, deficiencyRatio };
+}
+
 function getInitialMaintenancePercent(preferred?: number): number {
   if (Number.isFinite(preferred)) {
     return clampMaintenancePercent(preferred);
@@ -208,7 +311,8 @@ function createInitialProperty(definition: PropertyDefinition): GameProperty {
     tenant: null,
     mortgage: null,
     autoRelist: true,
-    rentalMarketingPausedForMaintenance: false
+    rentalMarketingPausedForMaintenance: false,
+    maintenanceWork: null
   };
 }
 
@@ -343,7 +447,12 @@ function degradeMaintenance(property: GameProperty, days = 1, occupied = false):
     : MAINTENANCE_CONFIG.unoccupiedDecayPerMonth;
   const decayPerDay = decayPerMonth / 30;
   const updatedPercent = clampMaintenancePercent(property.maintenancePercent - decayPerDay * days);
-  return { ...property, maintenancePercent: updatedPercent };
+  if (Math.abs(updatedPercent - property.maintenancePercent) < 1e-6) {
+    return property;
+  }
+  const cost = calculateMaintenanceAdjustedValue(property.baseValue, updatedPercent);
+  const monthlyRentEstimate = calculateMonthlyRentEstimate(cost, property.demandScore);
+  return { ...property, maintenancePercent: updatedPercent, cost, monthlyRentEstimate };
 }
 
 function processMonthlyTick(state: GameState): GameState {
@@ -402,6 +511,53 @@ function processMonthlyTick(state: GameState): GameState {
         ...updated,
         mortgage: { ...updated.mortgage, remainingTermMonths: remaining }
       };
+    }
+
+    let work = updated.maintenanceWork ? { ...updated.maintenanceWork } : null;
+    if (work) {
+      if (work.startDelayMonths > 0) {
+        work.startDelayMonths = Math.max(work.startDelayMonths - 1, 0);
+        if (work.startDelayMonths <= 0) {
+          work.startDelayMonths = 0;
+          work.monthsRemaining = Math.max(work.monthsRemaining ?? 1, 1);
+          updated = {
+            ...updated,
+            tenant: null,
+            rentalMarketingPausedForMaintenance: true
+          };
+          historyMessages.push(
+            `Maintenance work began on ${updated.name}. Property unavailable for tenants until work completes.`
+          );
+        }
+      }
+
+      if (!updated.tenant && work.startDelayMonths <= 0) {
+        work.monthsRemaining = Math.max((work.monthsRemaining ?? 0) - 1, 0);
+        if (work.monthsRemaining <= 0) {
+          const completionCost = Math.max(Math.round(work.cost ?? 0), 0);
+          const newMaintenancePercent = 100;
+          const newCost = calculateMaintenanceAdjustedValue(updated.baseValue, newMaintenancePercent);
+          const newRentEstimate = calculateMonthlyRentEstimate(newCost, updated.demandScore);
+          const costLabel = completionCost > 0 ? ` at a cost of ${formatCurrency(completionCost)}` : '';
+          historyMessages.push(
+            `Maintenance completed on ${updated.name}${costLabel}. Condition restored to 100%.`
+          );
+          balanceChange -= completionCost;
+          updated = {
+            ...updated,
+            maintenancePercent: newMaintenancePercent,
+            cost: newCost,
+            monthlyRentEstimate: newRentEstimate,
+            rentalMarketingPausedForMaintenance: false,
+            maintenanceWork: null
+          };
+          work = null;
+        }
+      }
+    }
+
+    if (work) {
+      updated = { ...updated, maintenanceWork: { ...work } };
     }
 
     historyMessages.forEach((message) => {
@@ -660,7 +816,8 @@ export const managementView = derived(gameState, ($state) => {
       maintenanceHtml: '',
       propertyId: '',
       isOwned: false,
-      leasingControls: createEmptyLeasingControls()
+      leasingControls: createEmptyLeasingControls(),
+      maintenanceState: createEmptyMaintenanceState()
     };
   }
   const property =
@@ -679,7 +836,8 @@ export const managementView = derived(gameState, ($state) => {
       maintenanceHtml: '',
       propertyId: '',
       isOwned: false,
-      leasingControls: createEmptyLeasingControls()
+      leasingControls: createEmptyLeasingControls(),
+      maintenanceState: createEmptyMaintenanceState()
     };
   }
 
@@ -773,15 +931,31 @@ export const managementView = derived(gameState, ($state) => {
     </div>
   `;
 
-  const maintenanceHtml = `
-    <div class="section-card">
-      <h6>Maintenance</h6>
-      <p class="mb-2">Current condition: <strong>${formatPercent(property.maintenancePercent)}</strong></p>
-      <p class="mb-0">Schedule refurbishments once the maintenance level falls below ${formatPercent(
-        MAINTENANCE_CONFIG.criticalThreshold
-      )}.</p>
-    </div>
-  `;
+  const tenantMonthsRemaining = getTenantMonthsRemaining(property);
+  const maintenanceEstimate = estimateMaintenanceCost(property, { delayMonths: tenantMonthsRemaining });
+  const maintenanceWork = property.maintenanceWork ? { ...property.maintenanceWork } : null;
+  const workDelayMonths = maintenanceWork ? Math.max(maintenanceWork.startDelayMonths ?? 0, 0) : 0;
+  const maintenanceState: ManagementMaintenanceState = {
+    maintenancePercent: property.maintenancePercent,
+    projectedCost: maintenanceEstimate.projectedCost,
+    projectedPercent: maintenanceEstimate.projectedPercent,
+    tenantMonthsRemaining,
+    leaseCountdownLabel: tenantMonthsRemaining > 0 ? formatLeaseCountdown(tenantMonthsRemaining) : null,
+    work: maintenanceWork,
+    workDelayMonths,
+    workIsActive: Boolean(maintenanceWork && workDelayMonths <= 0),
+    maintenanceThreshold: MAINTENANCE_CONFIG.criticalThreshold,
+    canSchedule:
+      !maintenanceWork &&
+      property.maintenancePercent < 100 &&
+      maintenanceEstimate.projectedCost <= $state.balance,
+    reasons: {
+      atMaxMaintenance: property.maintenancePercent >= 100,
+      alreadyScheduled: Boolean(maintenanceWork),
+      insufficientFunds: maintenanceEstimate.projectedCost > $state.balance
+    }
+  };
+  const maintenanceHtml = '';
 
   const plans = rentPlans.map((plan) => ({
     id: plan.id,
@@ -820,7 +994,8 @@ export const managementView = derived(gameState, ($state) => {
       autoRelist: property.autoRelist,
       marketingPaused: property.rentalMarketingPausedForMaintenance,
       hasTenant: Boolean(property.tenant)
-    }
+    },
+    maintenanceState
   };
 });
 
@@ -1131,6 +1306,60 @@ export function setPropertyMarketingPaused(propertyId: string, paused: boolean):
       ? `Paused marketing at ${result.property.name} for maintenance.`
       : `Resumed tenant marketing at ${result.property.name}.`;
     return addHistory(result.state, message);
+  });
+}
+
+export function schedulePropertyMaintenance(propertyId: string): void {
+  gameState.update((state) => {
+    const index = state.portfolio.findIndex((property) => property.id === propertyId);
+    if (index === -1) {
+      return state;
+    }
+    const property = state.portfolio[index];
+    if (property.maintenanceWork) {
+      return addHistory(state, `${property.name} already has maintenance scheduled.`);
+    }
+    if (property.maintenancePercent >= 100) {
+      return addHistory(state, `${property.name} is already at 100% maintenance.`);
+    }
+
+    const tenantMonthsRemaining = getTenantMonthsRemaining(property);
+    const { projectedCost, projectedPercent } = estimateMaintenanceCost(property, {
+      delayMonths: tenantMonthsRemaining
+    });
+
+    if (projectedCost > state.balance) {
+      return addHistory(
+        state,
+        `Unable to schedule maintenance for ${property.name}: requires ${formatCurrency(projectedCost)} but only ${formatCurrency(state.balance)} is available.`
+      );
+    }
+
+    const maintenanceWork: MaintenanceWorkOrder = {
+      monthsRemaining: 1,
+      cost: projectedCost,
+      scheduledOnDay: state.day,
+      startDelayMonths: tenantMonthsRemaining
+    };
+
+    const updatedProperty: GameProperty = {
+      ...property,
+      maintenanceWork,
+      rentalMarketingPausedForMaintenance:
+        tenantMonthsRemaining === 0 ? true : property.rentalMarketingPausedForMaintenance
+    };
+
+    const portfolio = [...state.portfolio];
+    portfolio[index] = updatedProperty;
+
+    let nextState: GameState = { ...state, portfolio };
+
+    const message = tenantMonthsRemaining > 0
+      ? `Scheduled maintenance for ${property.name}: work will begin once the current lease ends (${formatLeaseCountdown(tenantMonthsRemaining)} remaining) and will require 1 month of vacancy (estimated cost ${formatCurrency(projectedCost)} based on an expected condition of ${formatPercent(projectedPercent)}).`
+      : `Scheduled maintenance for ${property.name}: property will be vacant for 1 month (estimated cost ${formatCurrency(projectedCost)}).`;
+
+    nextState = addHistory(nextState, message);
+    return nextState;
   });
 }
 
