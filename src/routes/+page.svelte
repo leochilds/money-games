@@ -7,6 +7,7 @@
   import PropertyPortfolio from '$lib/components/PropertyPortfolio.svelte';
   import RentalStatus from '$lib/components/RentalStatus.svelte';
   import ActivityHistory from '$lib/components/ActivityHistory.svelte';
+  import GameSettings from '$lib/components/GameSettings.svelte';
   import ManagementModal from '$lib/components/ManagementModal.svelte';
   import FinanceModal from '$lib/components/FinanceModal.svelte';
 
@@ -226,21 +227,7 @@
       balanceLabel={$balanceLabel}
       centralBankRateLabel={$centralBankRateLabel}
       monthlyCashFlowLabel={$monthlyCashFlowLabel}
-      speed={$speedLabel}
-      speedOptions={speedOptions}
-      on:speedchange={handleSpeedChange}
-      on:reset={handleReset}
     />
-    <PropertyPortfolio
-      title="Property Overview"
-      description="Review your current opportunities and keep tabs on potential acquisitions."
-      properties={$propertyCards}
-      on:manage={handleManageEvent}
-      on:purchase={handlePurchaseEvent}
-    />
-  </div>
-  <div class="row g-4 mt-1">
-    <RentalStatus items={$rentalItems} on:manage={handleManageEvent} />
   </div>
 {:else if activeTab === 'market'}
   <div class="row g-4">
@@ -264,8 +251,17 @@
       on:purchase={handlePurchaseEvent}
     />
   </div>
+  <div class="row g-4 mt-1">
+    <RentalStatus items={$rentalItems} on:manage={handleManageEvent} />
+  </div>
 {:else}
   <div class="row g-4">
+    <GameSettings
+      speed={$speedLabel}
+      speedOptions={speedOptions}
+      on:speedchange={handleSpeedChange}
+      on:reset={handleReset}
+    />
     <ActivityHistory entries={$historyEntries} />
   </div>
 {/if}

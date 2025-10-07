@@ -19,7 +19,7 @@
   }
 </script>
 
-<section class="col-12 col-lg-6">
+<section class="col-12">
   <div class="card shadow-sm h-100">
     <div class="card-header bg-warning">Rental Income Status</div>
     <div class="card-body income-status-body">
