@@ -24,7 +24,7 @@
   }
 </script>
 
-<section class="col-12 col-lg-8">
+<section class="col-12">
   <div class="card shadow-sm h-100">
     <div class="card-header bg-info text-white">{title}</div>
     <div class="card-body">

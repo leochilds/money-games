@@ -4,7 +4,7 @@
   let { entries = [] as HistoryEntry[] } = $props();
 </script>
 
-<section class="col-12 col-lg-6">
+<section class="col-12">
   <div class="card shadow-sm h-100">
     <div class="card-header bg-secondary text-white">Activity History</div>
     <div class="card-body">
