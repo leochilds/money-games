@@ -1,27 +1,14 @@
 import { derived, get, writable } from 'svelte/store';
+import {
+  FINANCE_CONFIG,
+  MAINTENANCE_CONFIG,
+  defaultProperties,
+  featureAddOns as FEATURE_ADD_ONS,
+  propertyTypeMultipliers,
+  type PropertyDefinition
+} from '$lib/config';
 import type { HistoryEntry, PropertyCard, RentalItem } from '$lib/types';
-
-type PropertyLocation = {
-  proximity?: number;
-  schoolRating?: number;
-  crimeScore?: number;
-};
-
-type PropertyTypeKey = 'apartment' | 'townhouse' | 'single_family' | 'luxury';
-
-type PropertyDefinition = {
-  id: string;
-  name: string;
-  description: string;
-  propertyType: PropertyTypeKey;
-  bedrooms: number;
-  bathrooms: number;
-  features: string[];
-  locationDescriptor: string;
-  demandScore: number;
-  location: PropertyLocation;
-  maintenancePercent?: number;
-};
+import { formatCurrency, formatInterestRate, formatPercentage, formatPropertyType } from '$lib/utils';
 
 type RentPlan = {
   id: string;
@@ -98,156 +85,15 @@ type GameState = {
   management: ManagementState;
 };
 
-const propertyTypeMultipliers: Record<PropertyTypeKey, number> = {
-  apartment: 0.9,
-  townhouse: 1.05,
-  single_family: 1.15,
-  luxury: 1.35
-} as const;
-
-const MAINTENANCE_CONFIG = {
-  initialPercentRange: [25, 75],
-  occupiedDecayPerMonth: 1,
-  unoccupiedDecayPerMonth: 0.2,
-  refurbishmentCostRatio: 0.25,
-  criticalThreshold: 25
-} as const;
-
-const FINANCE_CONFIG = {
-  depositOptions: [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5],
-  termOptions: [2, 5, 10, 25],
-  fixedPeriodOptions: [2, 5, 10],
-  defaultDepositRatio: 0.2,
-  defaultTermYears: 25,
-  defaultFixedPeriodYears: 5,
-  minimumRate: 0.025,
-  maximumRate: 0.085,
-  centralBank: {
-    initialRate: 0.0375,
-    minimumRate: 0.005,
-    adjustmentIntervalDays: 30,
-    maxStepPerAdjustment: 0.0015
-  },
-  rateModel: {
-    variableMarginBase: 0.015,
-    variableMarginDepositFactor: 0.08,
-    minimumMargin: 0.004,
-    fixedRateIncentives: {
-      2: -0.0035,
-      5: -0.0025,
-      10: -0.0015,
-      25: 0
-    } as Record<number, number>
-  }
-} as const;
-
 const MINIMUM_DEPOSIT_RATIO = Math.min(...FINANCE_CONFIG.depositOptions);
-
-const defaultProperties: PropertyDefinition[] = [
-  {
-    id: 'studio',
-    name: 'Downtown Micro Loft',
-    description: 'Compact living in the heart of the city, perfect for commuters.',
-    propertyType: 'apartment',
-    bedrooms: 1,
-    bathrooms: 1,
-    features: ['City View', 'Shared Rooftop', 'In-Unit Laundry'],
-    locationDescriptor: 'Transit-rich downtown block with nightlife and offices steps away.',
-    demandScore: 9,
-    location: {
-      proximity: 0.95,
-      schoolRating: 5,
-      crimeScore: 4
-    },
-    maintenancePercent: 65
-  },
-  {
-    id: 'townhouse',
-    name: 'Historic Row Townhouse',
-    description: 'Updated interiors with charming brick facade and private entry.',
-    propertyType: 'townhouse',
-    bedrooms: 3,
-    bathrooms: 2,
-    features: ['Private Patio', 'Finished Basement', 'Smart Thermostat'],
-    locationDescriptor: 'Tree-lined heritage street close to cafes and boutique shops.',
-    demandScore: 7,
-    location: {
-      proximity: 0.75,
-      schoolRating: 7,
-      crimeScore: 3
-    },
-    maintenancePercent: 58
-  },
-  {
-    id: 'suburb',
-    name: 'Suburban Cul-de-sac Home',
-    description: 'Spacious single-family house in a top-rated school district.',
-    propertyType: 'single_family',
-    bedrooms: 4,
-    bathrooms: 3,
-    features: ['Two-Car Garage', 'Backyard Deck', 'Home Office'],
-    locationDescriptor: 'Family-friendly cul-de-sac with parks and community amenities.',
-    demandScore: 6,
-    location: {
-      proximity: 0.6,
-      schoolRating: 9,
-      crimeScore: 2
-    },
-    maintenancePercent: 72
-  },
-  {
-    id: 'penthouse',
-    name: 'Skyline Signature Penthouse',
-    description: 'Expansive luxury residence with concierge and spa access.',
-    propertyType: 'luxury',
-    bedrooms: 3,
-    bathrooms: 3,
-    features: ['Private Elevator', 'Wraparound Terrace', 'Floor-to-Ceiling Windows', 'Concierge Service'],
-    locationDescriptor: 'Top-floor suite in a premier downtown landmark tower.',
-    demandScore: 10,
-    location: {
-      proximity: 0.98,
-      schoolRating: 8,
-      crimeScore: 2
-    },
-    maintenancePercent: 52
-  }
-];
-
-const currencyFormatter = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 0
-});
-
-const rateFormatter = new Intl.NumberFormat('en-US', {
-  style: 'percent',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2
-});
-
-const percentFormatter = new Intl.NumberFormat('en-US', {
-  style: 'percent',
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 0
-});
 
 const RENT_RATE_OFFSETS = [-0.01, 0, 0.0125];
 const LEASE_LENGTH_CHOICES = [12, 18, 24];
 
 let historyIdCounter = 1;
 
-function formatCurrency(amount: number): string {
-  return currencyFormatter.format(Math.round(amount));
-}
-
-function formatRate(value: number): string {
-  return rateFormatter.format(value);
-}
-
 function formatPercent(value: number): string {
-  return percentFormatter.format(value / 100);
+  return formatPercentage(value / 100);
 }
 
 function clampMaintenancePercent(value?: number): number {
@@ -274,23 +120,10 @@ function calculatePropertyValue(property: PropertyDefinition): number {
   const schoolScore = (location.schoolRating ?? 0) * weights.schoolRating;
   const safetyScore = (10 - (location.crimeScore ?? 5)) * weights.safety;
 
-  const featureAddOns: Record<string, number> = {
-    'City View': 60,
-    'Shared Rooftop': 40,
-    'In-Unit Laundry': 55,
-    'Private Patio': 65,
-    'Finished Basement': 75,
-    'Smart Thermostat': 30,
-    'Two-Car Garage': 90,
-    'Backyard Deck': 70,
-    'Home Office': 50,
-    'Private Elevator': 120,
-    'Wraparound Terrace': 110,
-    'Floor-to-Ceiling Windows': 85,
-    'Concierge Service': 95
-  };
-
-  const featureScore = property.features.reduce((total, feature) => total + (featureAddOns[feature] ?? 35), 0);
+  const featureScore = property.features.reduce(
+    (total, feature) => total + (FEATURE_ADD_ONS[feature] ?? 35),
+    0
+  );
 
   const baseValue =
     weights.base +
@@ -689,7 +522,7 @@ export const propertyCards = derived(gameState, ($state): PropertyCard[] => {
       id: property.id,
       name: property.name,
       description: property.description,
-      summaryHtml: `<strong>${property.bedrooms}</strong> bed · <strong>${property.bathrooms}</strong> bath · ${property.propertyType.replace('_', ' ')}`,
+      summaryHtml: `<strong>${property.bedrooms}</strong> bed · <strong>${property.bathrooms}</strong> bath · ${formatPropertyType(property.propertyType)}`,
       featureTags: property.features,
       locationDetailsHtml: buildLocationSummary(property),
       maintenanceLabel: formatMaintenanceLabel(property),
@@ -709,7 +542,7 @@ export const propertyCards = derived(gameState, ($state): PropertyCard[] => {
       id: property.id,
       name: property.name,
       description: property.description,
-      summaryHtml: `<strong>${property.bedrooms}</strong> bed · <strong>${property.bathrooms}</strong> bath · ${property.propertyType.replace('_', ' ')}`,
+      summaryHtml: `<strong>${property.bedrooms}</strong> bed · <strong>${property.bathrooms}</strong> bath · ${formatPropertyType(property.propertyType)}`,
       featureTags: property.features,
       locationDetailsHtml: buildLocationSummary(property),
       maintenanceLabel: formatMaintenanceLabel(property),
@@ -835,7 +668,7 @@ export const managementView = derived(gameState, ($state) => {
           <h6>Mortgage details</h6>
           <p class="mb-2">Outstanding balance: <strong>${formatCurrency(property.mortgage.principal)}</strong></p>
           <p class="mb-2">Monthly payment: <strong>${formatCurrency(property.mortgage.monthlyPayment)}</strong></p>
-          <p class="mb-0">Rate: <strong>${formatRate(property.mortgage.annualInterestRate)}</strong></p>
+          <p class="mb-0">Rate: <strong>${formatInterestRate(property.mortgage.annualInterestRate)}</strong></p>
         </div>
       `
     : `
@@ -951,7 +784,7 @@ export const financeView = derived(gameState, ($state) => {
       mortgagePreview.depositRatio * 100
     )}%)</strong></p>
     <p class="mb-2">Monthly payment: <strong>${formatCurrency(mortgagePreview.monthlyPayment)}</strong></p>
-    <p class="mb-0">Fixed rate: <strong>${formatRate(mortgagePreview.annualInterestRate)}</strong></p>
+    <p class="mb-0">Fixed rate: <strong>${formatInterestRate(mortgagePreview.annualInterestRate)}</strong></p>
   `;
 
   const affordabilityNoteHtml = canAffordDeposit
@@ -967,7 +800,7 @@ export const financeView = derived(gameState, ($state) => {
   return {
     open: true,
     propertyName: property.name,
-    propertySummary: `<strong>${property.bedrooms}</strong> bed · <strong>${property.bathrooms}</strong> bath · ${property.propertyType.replace('_', ' ')}`,
+    propertySummary: `<strong>${property.bedrooms}</strong> bed · <strong>${property.bathrooms}</strong> bath · ${formatPropertyType(property.propertyType)}`,
     depositOptionsHtml,
     fixedPeriodOptionsHtml,
     termOptionsHtml,
