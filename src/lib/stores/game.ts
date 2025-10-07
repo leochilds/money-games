@@ -1710,8 +1710,7 @@ export function confirmFinance(): void {
 
   const updatedProperty: GameProperty = {
     ...property,
-    mortgage,
-    tenant: null
+    mortgage
   };
 
   let nextState: GameState = {
