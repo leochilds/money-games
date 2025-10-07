@@ -141,6 +141,8 @@ const FINANCE_CONFIG = {
   }
 } as const;
 
+const MINIMUM_DEPOSIT_RATIO = Math.min(...FINANCE_CONFIG.depositOptions);
+
 const defaultProperties: PropertyDefinition[] = [
   {
     id: 'studio',
@@ -717,7 +719,8 @@ export const propertyCards = derived(gameState, ($state): PropertyCard[] => {
       rentHtml: formatRentSummary(property),
       statusChips: buildStatusChips(property),
       owned: false,
-      disablePurchase: ownedIds.has(property.id) || property.cost * FINANCE_CONFIG.defaultDepositRatio > $state.balance,
+      disablePurchase:
+        ownedIds.has(property.id) || property.cost * Math.min($state.finance.depositRatio, MINIMUM_DEPOSIT_RATIO) > $state.balance,
       manageLabel: 'Inspect'
     });
   });
