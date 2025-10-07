@@ -4,7 +4,8 @@
   import {
     createEmptyMaintenanceState,
     type ManagementLeasingControls,
-    type ManagementMaintenanceState
+    type ManagementMaintenanceState,
+    type ManagementSaleState
   } from '$lib/stores/game';
   import { formatCurrency, formatLeaseCountdown, formatPercentage } from '$lib/utils';
 
@@ -23,6 +24,7 @@
     autorelisttoggle: { propertyId: string; enabled: boolean };
     marketingtoggle: { propertyId: string; paused: boolean };
     maintenanceschedule: { propertyId: string };
+    sell: { propertyId: string };
   }>();
 
   const emptyLeasingControls: ManagementLeasingControls = {
@@ -51,7 +53,8 @@
     propertyId = '',
     isOwned = false,
     leasingControls = emptyLeasingControls,
-    maintenanceState = emptyMaintenanceState
+    maintenanceState = emptyMaintenanceState,
+    saleState = null as ManagementSaleState | null
   } = $props();
 
   let modalElement: HTMLDivElement | null = null;
@@ -277,6 +280,13 @@
       return;
     }
     dispatch('maintenanceschedule', { propertyId });
+  }
+
+  function handleSaleClick() {
+    if (!propertyId || !saleState) {
+      return;
+    }
+    dispatch('sell', { propertyId });
   }
 </script>
 
@@ -507,6 +517,36 @@
             >
               <div id="managementTransactions">
                 {@html transactionsHtml}
+                {#if saleState}
+                  <div class="section-card mt-3">
+                    <h6>Ownership actions</h6>
+                    <p class="mb-1">
+                      <strong>Projected sale:</strong> {formatCurrency(saleState.salePrice)}
+                      {#if saleState.outstandingBalance > 0}
+                        (net {formatCurrency(saleState.netProceeds)} after repaying
+                        {formatCurrency(saleState.outstandingBalance)})
+                      {:else}
+                        (net {formatCurrency(saleState.netProceeds)})
+                      {/if}
+                    </p>
+                    {#if saleState.restrictions.length > 0}
+                      <ul class="small text-muted mb-2">
+                        {#each saleState.restrictions as restriction}
+                          <li>{restriction}</li>
+                        {/each}
+                      </ul>
+                    {/if}
+                    <button
+                      type="button"
+                      class="btn btn-outline-danger"
+                      onclick={handleSaleClick}
+                      disabled={!saleState.canSell}
+                      title={!saleState.canSell ? saleState.restrictions.join(' ') : undefined}
+                    >
+                      Sell property
+                    </button>
+                  </div>
+                {/if}
               </div>
             </div>
             <div

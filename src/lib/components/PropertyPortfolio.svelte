@@ -5,6 +5,7 @@
   const dispatch = createEventDispatcher<{
     manage: string;
     purchase: string;
+    sell: string;
   }>();
 
   let {
@@ -21,6 +22,10 @@
 
   function handlePurchase(propertyId: string) {
     dispatch('purchase', propertyId);
+  }
+
+  function handleSell(propertyId: string) {
+    dispatch('sell', propertyId);
   }
 </script>
 
@@ -120,6 +125,18 @@
                     >
                       Purchase
                     </button>
+                    {#if property.showSell}
+                      <button
+                        type="button"
+                        class="btn btn-outline-danger"
+                        onclick={() => handleSell(property.id)}
+                        disabled={property.sellDisabled}
+                        title={property.sellDisabled ? property.sellDisabledReason : undefined}
+                        aria-label={`Sell ${property.name}`}
+                      >
+                        {property.sellLabel ?? 'Sell'}
+                      </button>
+                    {/if}
                   </div>
                 </div>
               </div>

@@ -154,6 +154,14 @@ export type ManagementMaintenanceState = {
   };
 };
 
+export type ManagementSaleState = {
+  salePrice: number;
+  outstandingBalance: number;
+  netProceeds: number;
+  canSell: boolean;
+  restrictions: string[];
+};
+
 type GameState = {
   balance: number;
   day: number;
@@ -267,6 +275,61 @@ function calculateMonthlyRentEstimate(cost: number, demandScore: number): number
   const baseRent = cost * 0.0065;
   const demandPremium = (demandScore - 5) * 45;
   return Math.max(Math.round(baseRent + demandPremium), 0);
+}
+
+function getMaintenanceThreshold(): number {
+  const threshold = MAINTENANCE_CONFIG.criticalThreshold;
+  if (!Number.isFinite(threshold)) {
+    return 25;
+  }
+  return threshold ?? 25;
+}
+
+function hasActiveMaintenanceWork(property: GameProperty): boolean {
+  const work = property.maintenanceWork;
+  if (!work) {
+    return false;
+  }
+  const delay = Number.isFinite(work.startDelayMonths) ? Math.max(work.startDelayMonths ?? 0, 0) : 0;
+  if (delay > 0) {
+    return false;
+  }
+  const remaining = Number.isFinite(work.monthsRemaining) ? Math.max(work.monthsRemaining ?? 0, 0) : 0;
+  return remaining > 0;
+}
+
+type SaleContext = {
+  salePrice: number;
+  outstandingBalance: number;
+  netProceeds: number;
+  maintenancePercent: number;
+  maintenanceThreshold: number;
+  canSell: boolean;
+  restrictions: string[];
+};
+
+function createSaleContext(property: GameProperty): SaleContext {
+  const salePrice = roundCurrency(calculateSalePrice(property));
+  const outstandingBalance = roundCurrency(property.mortgage?.remainingBalance ?? 0);
+  const maintenancePercent = clampMaintenancePercent(property.maintenancePercent ?? 0);
+  const maintenanceThreshold = getMaintenanceThreshold();
+  const restrictions: string[] = [];
+  if (maintenancePercent < maintenanceThreshold) {
+    restrictions.push(`Maintenance must be at least ${maintenanceThreshold}%.`);
+  }
+  if (hasActiveMaintenanceWork(property)) {
+    restrictions.push('Maintenance work must be complete before selling.');
+  }
+  const netProceeds = roundCurrency(salePrice - outstandingBalance);
+  return {
+    salePrice,
+    outstandingBalance,
+    netProceeds,
+    maintenancePercent,
+    maintenanceThreshold,
+    canSell: restrictions.length === 0,
+    restrictions
+  };
 }
 
 function clampDemandScore(score: number): number {
@@ -1346,6 +1409,7 @@ export const propertyCards = derived(gameState, ($state): PropertyCard[] => {
   const ownedIds = new Set($state.portfolio.map((property) => property.id));
 
   $state.portfolio.forEach((property) => {
+    const saleContext = createSaleContext(property);
     cards.push({
       id: property.id,
       name: property.name,
@@ -1361,7 +1425,11 @@ export const propertyCards = derived(gameState, ($state): PropertyCard[] => {
       statusChips: buildStatusChips(property),
       owned: true,
       disablePurchase: true,
-      manageLabel: 'Manage lease'
+      manageLabel: 'Manage lease',
+      showSell: true,
+      sellLabel: 'Sell',
+      sellDisabled: !saleContext.canSell,
+      sellDisabledReason: saleContext.restrictions.join(' ')
     });
   });
 
@@ -1452,6 +1520,7 @@ export const managementView = derived(gameState, ($state) => {
       maintenanceHtml: '',
       propertyId: '',
       isOwned: false,
+      saleState: null,
       leasingControls: createEmptyLeasingControls(),
       maintenanceState: createEmptyMaintenanceState()
     };
@@ -1472,6 +1541,7 @@ export const managementView = derived(gameState, ($state) => {
       maintenanceHtml: '',
       propertyId: '',
       isOwned: false,
+      saleState: null,
       leasingControls: createEmptyLeasingControls(),
       maintenanceState: createEmptyMaintenanceState()
     };
@@ -1608,6 +1678,9 @@ export const managementView = derived(gameState, ($state) => {
   const selectedLeaseMonths = selectedPlan?.leaseMonths ?? leaseMonthsOptions[0] ?? 0;
   const selectedRateOffset = selectedPlan?.rateOffset ?? rentPremiumOptions[0]?.value ?? 0;
 
+  const isOwned = $state.portfolio.some((item) => item.id === property.id);
+  const saleContext = isOwned ? createSaleContext(property) : null;
+
   return {
     open: true,
     activeSection: $state.management.activeSection,
@@ -1619,7 +1692,16 @@ export const managementView = derived(gameState, ($state) => {
     transactionsHtml,
     maintenanceHtml,
     propertyId: property.id,
-    isOwned: $state.portfolio.some((item) => item.id === property.id),
+    isOwned,
+    saleState: saleContext
+      ? {
+          salePrice: saleContext.salePrice,
+          outstandingBalance: saleContext.outstandingBalance,
+          netProceeds: saleContext.netProceeds,
+          canSell: saleContext.canSell,
+          restrictions: saleContext.restrictions
+        }
+      : null,
     leasingControls: {
       plans,
       leaseMonthsOptions,
@@ -2147,5 +2229,65 @@ export function purchaseProperty(propertyId: string): void {
 
 export function manageProperty(propertyId: string): void {
   openManagement(propertyId);
+}
+
+export function sellProperty(propertyId: string): void {
+  gameState.update((state) => {
+    const index = state.portfolio.findIndex((item) => item.id === propertyId);
+    if (index < 0) {
+      return state;
+    }
+    const property = state.portfolio[index];
+    const saleContext = createSaleContext(property);
+
+    if (!saleContext.canSell) {
+      const reasonText = saleContext.restrictions.join(' ');
+      const message = reasonText
+        ? `Sale attempt blocked for ${property.name}: ${reasonText}`
+        : `Sale attempt blocked for ${property.name}.`;
+      return addHistory(state, message);
+    }
+
+    const salePrice = saleContext.salePrice;
+    const outstanding = saleContext.outstandingBalance;
+    const netProceeds = saleContext.netProceeds;
+    const updatedPortfolio = state.portfolio.filter((_, idx) => idx !== index);
+    const balanceAfterSale = Math.max(roundCurrency(state.balance + netProceeds), 0);
+
+    let nextState: GameState = {
+      ...state,
+      portfolio: updatedPortfolio,
+      balance: balanceAfterSale
+    };
+
+    if (state.management.propertyId === propertyId) {
+      nextState = {
+        ...nextState,
+        management: {
+          ...state.management,
+          open: false,
+          propertyId: null
+        }
+      };
+    }
+
+    const salePriceLabel = formatCurrency(salePrice);
+    const outstandingLabel = formatCurrency(outstanding);
+    const netLabel = formatCurrency(Math.abs(netProceeds));
+    const netProceedsLabel = formatCurrency(netProceeds);
+    let historyMessage = `Sold ${property.name} for ${salePriceLabel}.`;
+    if (outstanding > 0) {
+      if (netProceeds >= 0) {
+        historyMessage += ` Repaid ${outstandingLabel} outstanding on the mortgage and netted ${netProceedsLabel}.`;
+      } else {
+        historyMessage += ` Repaid ${outstandingLabel} outstanding on the mortgage, covering a shortfall of ${netLabel}.`;
+      }
+    } else {
+      historyMessage += ` Net proceeds ${netProceedsLabel}.`;
+    }
+
+    nextState = addHistory(nextState, historyMessage);
+    return nextState;
+  });
 }
 

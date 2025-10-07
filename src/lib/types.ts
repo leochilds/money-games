@@ -19,6 +19,10 @@ export type PropertyCard = {
   owned?: boolean;
   disablePurchase?: boolean;
   manageLabel?: string;
+  showSell?: boolean;
+  sellLabel?: string;
+  sellDisabled?: boolean;
+  sellDisabledReason?: string;
 };
 
 export type RentalItemAction = {
