@@ -135,6 +135,12 @@
   const rentSliderMax = $derived.by(() =>
     Math.max(leasingControls.rentPremiumOptions.length - 1, 0)
   );
+  const hasLeaseOptions = $derived.by(
+    () => leasingControls.leaseMonthsOptions.length > 0
+  );
+  const hasRentPremiumOptions = $derived.by(
+    () => leasingControls.rentPremiumOptions.length > 0
+  );
   const leaseIndex = $derived.by(() => {
     const idx = leasingControls.leaseMonthsOptions.findIndex(
       (value) => value === leasingControls.selectedLeaseMonths
@@ -207,7 +213,7 @@
   }
 
   function handleLeaseSliderChange(event: Event) {
-    if (!propertyId || leaseSliderMax <= 0) {
+    if (!propertyId || leasingControls.leaseMonthsOptions.length === 0) {
       return;
     }
     const input = event.target as HTMLInputElement | null;
@@ -226,7 +232,7 @@
   }
 
   function handleRentSliderChange(event: Event) {
-    if (!propertyId || rentSliderMax <= 0) {
+    if (!propertyId || leasingControls.rentPremiumOptions.length === 0) {
       return;
     }
     const input = event.target as HTMLInputElement | null;
@@ -386,7 +392,7 @@
                 {@html leasingHtml}
                 {#if isOwned}
                   <div class="leasing-controls mt-3 d-flex flex-column gap-3">
-                    {#if leaseSliderMax > 0}
+                    {#if hasLeaseOptions}
                       <div>
                         <label for="leaseLengthRange" class="form-label fw-semibold">Lease length</label>
                         <input
@@ -410,7 +416,7 @@
                         {/if}
                       </div>
                     {/if}
-                    {#if rentSliderMax > 0}
+                    {#if hasRentPremiumOptions}
                       <div>
                         <label for="rentPremiumRange" class="form-label fw-semibold">Rent premium</label>
                         <input
