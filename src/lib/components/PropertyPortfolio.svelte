@@ -8,6 +8,7 @@
   }>();
 
   let {
+    title = 'Property Portfolio',
     description =
       'Purchase properties to build your rental empire. Each property generates rent at the end of every in-game month. Owned properties are highlighted below.',
     properties = [] as PropertyCard[],
@@ -25,7 +26,7 @@
 
 <section class="col-12 col-lg-8">
   <div class="card shadow-sm h-100">
-    <div class="card-header bg-info text-white">Property Portfolio</div>
+    <div class="card-header bg-info text-white">{title}</div>
     <div class="card-body">
       <p>{description}</p>
       <div id="propertyList" class="row row-cols-1 row-cols-md-2 row-cols-xxl-3 g-3">

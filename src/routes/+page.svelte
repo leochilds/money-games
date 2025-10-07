@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { get } from 'svelte/store';
 
+  import GameSummaryBar from '$lib/components/GameSummaryBar.svelte';
   import PlayerOverview from '$lib/components/PlayerOverview.svelte';
   import PropertyPortfolio from '$lib/components/PropertyPortfolio.svelte';
   import RentalStatus from '$lib/components/RentalStatus.svelte';
@@ -44,6 +45,15 @@
     closeFinance
   } from '$lib/stores/game';
 
+  type TabId = 'dashboard' | 'market' | 'portfolio' | 'settings';
+
+  const navigationTabs: { id: TabId; label: string }[] = [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'market', label: 'Property Market' },
+    { id: 'portfolio', label: 'Portfolio' },
+    { id: 'settings', label: 'Settings' }
+  ];
+
   const speedOptions = [
     { value: '2000', label: '0.5x (slow & steady)' },
     { value: '1000', label: '1x (default)' },
@@ -51,7 +61,11 @@
     { value: '250', label: '4x (very fast)' }
   ];
 
+  let activeTab: TabId = 'dashboard';
   let intervalId: ReturnType<typeof setInterval> | null = null;
+
+  $: marketProperties = $propertyCards.filter((property) => !property.owned);
+  $: ownedProperties = $propertyCards.filter((property) => property.owned);
 
   function stopLoop() {
     if (intervalId) {
@@ -185,29 +199,76 @@
   });
 </script>
 
-<div class="row g-4">
-  <PlayerOverview
-    currentDay={$day}
-    isPaused={$isPaused}
-    balanceLabel={$balanceLabel}
-    centralBankRateLabel={$centralBankRateLabel}
-    monthlyCashFlowLabel={$monthlyCashFlowLabel}
-    speed={$speedLabel}
-    speedOptions={speedOptions}
-    on:speedchange={handleSpeedChange}
-    on:reset={handleReset}
-  />
-  <PropertyPortfolio
-    properties={$propertyCards}
-    on:manage={handleManageEvent}
-    on:purchase={handlePurchaseEvent}
-  />
-</div>
+<GameSummaryBar
+  currentDay={$day}
+  balanceLabel={$balanceLabel}
+  centralBankRateLabel={$centralBankRateLabel}
+/>
 
-<div class="row g-4 mt-1">
-  <RentalStatus items={$rentalItems} on:manage={handleManageEvent} />
-  <ActivityHistory entries={$historyEntries} />
-</div>
+<nav class="nav nav-pills nav-fill shadow-sm mb-4 bg-white rounded" aria-label="Main navigation">
+  {#each navigationTabs as tab}
+    <button
+      type="button"
+      class={`nav-link py-3 fw-semibold${activeTab === tab.id ? ' active' : ''}`}
+      aria-current={activeTab === tab.id ? 'page' : undefined}
+      on:click={() => (activeTab = tab.id)}
+    >
+      {tab.label}
+    </button>
+  {/each}
+</nav>
+
+{#if activeTab === 'dashboard'}
+  <div class="row g-4">
+    <PlayerOverview
+      currentDay={$day}
+      isPaused={$isPaused}
+      balanceLabel={$balanceLabel}
+      centralBankRateLabel={$centralBankRateLabel}
+      monthlyCashFlowLabel={$monthlyCashFlowLabel}
+      speed={$speedLabel}
+      speedOptions={speedOptions}
+      on:speedchange={handleSpeedChange}
+      on:reset={handleReset}
+    />
+    <PropertyPortfolio
+      title="Property Overview"
+      description="Review your current opportunities and keep tabs on potential acquisitions."
+      properties={$propertyCards}
+      on:manage={handleManageEvent}
+      on:purchase={handlePurchaseEvent}
+    />
+  </div>
+  <div class="row g-4 mt-1">
+    <RentalStatus items={$rentalItems} on:manage={handleManageEvent} />
+  </div>
+{:else if activeTab === 'market'}
+  <div class="row g-4">
+    <PropertyPortfolio
+      title="Property Market"
+      description="Browse properties available to buy right now. Use manage to inspect details before committing."
+      properties={marketProperties}
+      showEmptyStateMessage={marketProperties.length === 0}
+      on:manage={handleManageEvent}
+      on:purchase={handlePurchaseEvent}
+    />
+  </div>
+{:else if activeTab === 'portfolio'}
+  <div class="row g-4">
+    <PropertyPortfolio
+      title="Your Portfolio"
+      description="These are the assets you currently own. Open a property to adjust leasing, financing and maintenance."
+      properties={ownedProperties}
+      showEmptyStateMessage={ownedProperties.length === 0}
+      on:manage={handleManageEvent}
+      on:purchase={handlePurchaseEvent}
+    />
+  </div>
+{:else}
+  <div class="row g-4">
+    <ActivityHistory entries={$historyEntries} />
+  </div>
+{/if}
 
 <ManagementModal
   open={$managementView.open}
