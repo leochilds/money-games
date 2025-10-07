@@ -42,11 +42,34 @@ type Mortgage = {
   deposit: number;
   principal: number;
   fixedPeriodYears: number;
+  fixedPeriodMonths: number;
   interestOnly: boolean;
   annualInterestRate: number;
   reversionRate: number;
+  baseRate: number;
+  variableRateMargin: number;
+  variableRateActive: boolean;
   monthlyPayment: number;
+  monthlyInterestRate: number;
   remainingTermMonths: number;
+  termMonths: number;
+  remainingBalance: number;
+};
+
+type MortgageVariableTransition = {
+  propertyId: string;
+  propertyName: string;
+  baseRate: number;
+  margin: number;
+  reversionRate: number;
+};
+
+type ForcedSaleResult = {
+  propertyId: string;
+  propertyName: string;
+  salePrice: number;
+  outstanding: number;
+  netProceeds: number;
 };
 
 type MaintenanceWorkOrder = {
@@ -659,14 +682,14 @@ function calculateMonthlyPayment({
 }): number {
   const monthlyRate = annualRate / 12;
   if (interestOnly) {
-    return Math.round(principal * monthlyRate);
+    return roundCurrency(principal * monthlyRate);
   }
   if (monthlyRate === 0) {
-    return Math.round(principal / termMonths);
+    return roundCurrency(principal / termMonths);
   }
   const numerator = principal * monthlyRate * Math.pow(1 + monthlyRate, termMonths);
   const denominator = Math.pow(1 + monthlyRate, termMonths) - 1;
-  return Math.round(numerator / denominator);
+  return roundCurrency(numerator / denominator);
 }
 
 function createMortgage(property: GameProperty, state: GameState): Mortgage {
@@ -678,6 +701,9 @@ function createMortgage(property: GameProperty, state: GameState): Mortgage {
     fixedPeriodYears: state.finance.fixedPeriodYears
   });
   const termMonths = state.finance.termYears * 12;
+  const fixedPeriodMonths = Math.max(Math.round(state.finance.fixedPeriodYears * 12), 0);
+  const monthlyInterestRate = fixedRate / 12;
+  const variableRateMargin = Math.max(reversionRate - state.centralBankRate, 0);
   const monthlyPayment = calculateMonthlyPayment({
     principal,
     annualRate: fixedRate,
@@ -689,12 +715,300 @@ function createMortgage(property: GameProperty, state: GameState): Mortgage {
     deposit,
     principal,
     fixedPeriodYears: state.finance.fixedPeriodYears,
+    fixedPeriodMonths,
     interestOnly: state.finance.interestOnly,
     annualInterestRate: fixedRate,
     reversionRate,
+    baseRate: state.centralBankRate,
+    variableRateMargin,
+    variableRateActive: false,
     monthlyPayment,
-    remainingTermMonths: termMonths
+    monthlyInterestRate,
+    remainingTermMonths: termMonths,
+    termMonths,
+    remainingBalance: principal
   };
+}
+
+function resolveFixedPeriodMonths(mortgage: Mortgage | null | undefined): number {
+  if (!mortgage) {
+    return 0;
+  }
+  if (Number.isFinite(mortgage.fixedPeriodMonths)) {
+    return Math.max(Math.round(mortgage.fixedPeriodMonths), 0);
+  }
+  const computed = Math.max(Math.round(mortgage.fixedPeriodYears * 12), 0);
+  mortgage.fixedPeriodMonths = computed;
+  return computed;
+}
+
+function calculateMortgageReversionRate(mortgage: Mortgage | null | undefined): number {
+  if (!mortgage) {
+    return 0;
+  }
+  const explicit = Number.isFinite(mortgage.reversionRate) ? mortgage.reversionRate : null;
+  const baseRateValue = Number.isFinite(mortgage.baseRate) ? mortgage.baseRate : 0;
+  const margin = Number.isFinite(mortgage.variableRateMargin) ? mortgage.variableRateMargin : 0;
+  const resolved = explicit ?? baseRateValue + margin;
+  if (!Number.isFinite(resolved) || resolved < 0) {
+    return 0;
+  }
+  return clampRate(resolved);
+}
+
+function activateMortgageVariablePhase(
+  mortgage: Mortgage | null | undefined
+): { activated: boolean; baseRate?: number; margin?: number; reversionRate?: number } {
+  if (!mortgage || mortgage.variableRateActive || mortgage.remainingBalance <= 0.5) {
+    return { activated: false };
+  }
+
+  const reversionRate = calculateMortgageReversionRate(mortgage);
+  const margin = Number.isFinite(mortgage.variableRateMargin) ? mortgage.variableRateMargin : 0;
+  const baseRateValue = Number.isFinite(mortgage.baseRate) ? mortgage.baseRate : reversionRate - margin;
+
+  mortgage.variableRateActive = true;
+  mortgage.baseRate = baseRateValue;
+  mortgage.annualInterestRate = reversionRate;
+  mortgage.monthlyInterestRate = reversionRate / 12;
+  mortgage.reversionRate = reversionRate;
+
+  if (mortgage.interestOnly) {
+    mortgage.monthlyPayment = roundCurrency(mortgage.remainingBalance * mortgage.monthlyInterestRate);
+  } else {
+    const remainingMonths = Math.max(mortgage.remainingTermMonths, 0);
+    if (remainingMonths > 0 && mortgage.remainingBalance > 0.5) {
+      mortgage.monthlyPayment = calculateMonthlyPayment({
+        principal: mortgage.remainingBalance,
+        annualRate: reversionRate,
+        termMonths: remainingMonths,
+        interestOnly: false
+      });
+    } else {
+      mortgage.monthlyPayment = roundCurrency(mortgage.remainingBalance);
+    }
+  }
+
+  return {
+    activated: true,
+    baseRate: baseRateValue,
+    margin,
+    reversionRate
+  };
+}
+
+function calculateSalePrice(property: GameProperty): number {
+  const baseValue = Number.isFinite(property.baseValue) ? property.baseValue : property.cost;
+  const maintenancePercent = clampMaintenancePercent(property.maintenancePercent);
+  return calculateMaintenanceAdjustedValue(baseValue, maintenancePercent);
+}
+
+type MortgageProcessingOutcome = {
+  properties: GameProperty[];
+  totalPaid: number;
+  mortgagesCleared: string[];
+  forcedSales: ForcedSaleResult[];
+  variableTransitions: MortgageVariableTransition[];
+  netProceeds: number;
+};
+
+function processMortgagePayments(
+  properties: GameProperty[],
+  monthsElapsed: number,
+  startingBalance: number
+): MortgageProcessingOutcome {
+  if (monthsElapsed <= 0) {
+    return {
+      properties,
+      totalPaid: 0,
+      mortgagesCleared: [],
+      forcedSales: [],
+      variableTransitions: [],
+      netProceeds: 0
+    };
+  }
+
+  let totalPaid = 0;
+  const mortgagesCleared: string[] = [];
+  const forcedSales: ForcedSaleResult[] = [];
+  const variableTransitions: MortgageVariableTransition[] = [];
+  let realizedNetProceeds = 0;
+  const updatedProperties = [...properties];
+
+  for (let index = updatedProperties.length - 1; index >= 0; index -= 1) {
+    const property = updatedProperties[index];
+    const mortgage = property.mortgage;
+    if (!mortgage || mortgage.remainingBalance <= 0) {
+      continue;
+    }
+
+    const updatedMortgage: Mortgage = { ...mortgage };
+    const totalTermMonths = Math.max(Math.round(updatedMortgage.termMonths), 0);
+    const fixedPeriodMonths = resolveFixedPeriodMonths(updatedMortgage);
+
+    if (
+      fixedPeriodMonths <= 0 &&
+      !updatedMortgage.variableRateActive &&
+      updatedMortgage.remainingBalance > 0.5 &&
+      updatedMortgage.remainingTermMonths > 0
+    ) {
+      const activation = activateMortgageVariablePhase(updatedMortgage);
+      if (activation.activated) {
+        variableTransitions.push({
+          propertyId: property.id,
+          propertyName: property.name,
+          baseRate: activation.baseRate ?? 0,
+          margin: activation.margin ?? 0,
+          reversionRate: activation.reversionRate ?? 0
+        });
+      }
+    }
+
+    for (let month = 0; month < monthsElapsed; month += 1) {
+      if (updatedMortgage.remainingTermMonths <= 0 || updatedMortgage.remainingBalance <= 0) {
+        break;
+      }
+
+      const interestDueRaw = updatedMortgage.remainingBalance * updatedMortgage.monthlyInterestRate;
+      const interestDue = roundCurrency(interestDueRaw);
+      let payment = roundCurrency(updatedMortgage.monthlyPayment);
+      const totalDue = updatedMortgage.remainingBalance + interestDue;
+      if (!updatedMortgage.interestOnly && payment > totalDue) {
+        payment = roundCurrency(totalDue);
+      }
+
+      const principalPaid = updatedMortgage.interestOnly
+        ? 0
+        : roundCurrency(Math.max(payment - interestDue, 0));
+
+      updatedMortgage.remainingBalance = Math.max(
+        roundCurrency(updatedMortgage.remainingBalance - principalPaid),
+        0
+      );
+      updatedMortgage.remainingTermMonths = Math.max(updatedMortgage.remainingTermMonths - 1, 0);
+      totalPaid = roundCurrency(totalPaid + payment);
+
+      if (
+        !updatedMortgage.variableRateActive &&
+        updatedMortgage.remainingBalance > 0.5 &&
+        updatedMortgage.remainingTermMonths > 0
+      ) {
+        const monthsCompleted = Math.max(totalTermMonths - updatedMortgage.remainingTermMonths, 0);
+        if (monthsCompleted >= fixedPeriodMonths && fixedPeriodMonths > 0) {
+          const activation = activateMortgageVariablePhase(updatedMortgage);
+          if (activation.activated) {
+            variableTransitions.push({
+              propertyId: property.id,
+              propertyName: property.name,
+              baseRate: activation.baseRate ?? 0,
+              margin: activation.margin ?? 0,
+              reversionRate: activation.reversionRate ?? 0
+            });
+          }
+        }
+      }
+    }
+
+    if (
+      updatedMortgage.interestOnly &&
+      updatedMortgage.remainingTermMonths <= 0 &&
+      updatedMortgage.remainingBalance > 0.5
+    ) {
+      const outstanding = roundCurrency(updatedMortgage.remainingBalance);
+      const availableBalance = roundCurrency(startingBalance + realizedNetProceeds - totalPaid);
+      if (availableBalance >= outstanding) {
+        totalPaid = roundCurrency(totalPaid + outstanding);
+        updatedMortgage.remainingBalance = 0;
+        mortgagesCleared.push(property.name);
+        updatedProperties[index] = { ...property, mortgage: null };
+        continue;
+      }
+
+      const salePrice = roundCurrency(calculateSalePrice(property));
+      const netProceeds = roundCurrency(salePrice - outstanding);
+      realizedNetProceeds = roundCurrency(realizedNetProceeds + netProceeds);
+      forcedSales.push({
+        propertyId: property.id,
+        propertyName: property.name,
+        salePrice,
+        outstanding,
+        netProceeds
+      });
+      updatedProperties.splice(index, 1);
+      continue;
+    }
+
+    if (
+      !updatedMortgage.interestOnly &&
+      (updatedMortgage.remainingBalance <= 0.5 || updatedMortgage.remainingTermMonths <= 0)
+    ) {
+      mortgagesCleared.push(property.name);
+      updatedProperties[index] = { ...property, mortgage: null };
+      continue;
+    }
+
+    updatedProperties[index] = { ...property, mortgage: updatedMortgage };
+  }
+
+  return {
+    properties: updatedProperties,
+    totalPaid: roundCurrency(totalPaid),
+    mortgagesCleared,
+    forcedSales,
+    variableTransitions,
+    netProceeds: roundCurrency(realizedNetProceeds)
+  };
+}
+
+function applyVariableRateAdjustments(
+  properties: GameProperty[],
+  centralBankRate: number
+): { properties: GameProperty[]; history: string[] } {
+  const updated: GameProperty[] = [];
+  const history: string[] = [];
+
+  properties.forEach((property) => {
+    const mortgage = property.mortgage;
+    if (!mortgage || !mortgage.variableRateActive || mortgage.remainingBalance <= 0.5) {
+      updated.push(property);
+      return;
+    }
+
+    const adjustedMortgage: Mortgage = { ...mortgage };
+    const margin = Number.isFinite(adjustedMortgage.variableRateMargin)
+      ? adjustedMortgage.variableRateMargin
+      : 0;
+    const newRate = clampRate(centralBankRate + margin);
+
+    adjustedMortgage.baseRate = centralBankRate;
+    if (Math.abs(newRate - adjustedMortgage.annualInterestRate) > 1e-6) {
+      adjustedMortgage.annualInterestRate = newRate;
+      adjustedMortgage.reversionRate = newRate;
+      adjustedMortgage.monthlyInterestRate = newRate / 12;
+      if (adjustedMortgage.interestOnly) {
+        adjustedMortgage.monthlyPayment = roundCurrency(
+          adjustedMortgage.remainingBalance * adjustedMortgage.monthlyInterestRate
+        );
+      } else if (adjustedMortgage.remainingBalance > 0.5 && adjustedMortgage.remainingTermMonths > 0) {
+        adjustedMortgage.monthlyPayment = calculateMonthlyPayment({
+          principal: adjustedMortgage.remainingBalance,
+          annualRate: newRate,
+          termMonths: adjustedMortgage.remainingTermMonths,
+          interestOnly: false
+        });
+      } else {
+        adjustedMortgage.monthlyPayment = roundCurrency(adjustedMortgage.remainingBalance);
+      }
+
+      history.push(
+        `${property.name} variable mortgage adjusted to ${formatInterestRate(newRate)} following base rate update.`
+      );
+    }
+
+    updated.push({ ...property, mortgage: adjustedMortgage });
+  });
+
+  return { properties: updated, history };
 }
 
 function createHistoryEvent(day: number, message: string): HistoryEvent {
@@ -726,7 +1040,7 @@ function degradeMaintenance(property: GameProperty, days = 1, occupied = false):
 function processMonthlyTick(state: GameState): GameState {
   let nextState: GameState = { ...state };
   let balanceChange = 0;
-  const updatedPortfolio = nextState.portfolio.map((property) => {
+  let updatedPortfolio = nextState.portfolio.map((property) => {
     let updated = { ...property };
     const historyMessages: string[] = [];
 
@@ -767,18 +1081,6 @@ function processMonthlyTick(state: GameState): GameState {
       } else {
         historyMessages.push(`No tenant secured for ${updated.name} this month.`);
       }
-    }
-
-    if (updated.mortgage) {
-      balanceChange -= updated.mortgage.monthlyPayment;
-      historyMessages.push(
-        `Paid ${formatCurrency(updated.mortgage.monthlyPayment)} mortgage payment for ${updated.name}.`
-      );
-      const remaining = Math.max(updated.mortgage.remainingTermMonths - 1, 0);
-      updated = {
-        ...updated,
-        mortgage: { ...updated.mortgage, remainingTermMonths: remaining }
-      };
     }
 
     let work = updated.maintenanceWork ? { ...updated.maintenanceWork } : null;
@@ -835,8 +1137,63 @@ function processMonthlyTick(state: GameState): GameState {
     return updated;
   });
 
+  const monthsElapsed = 1;
+  const mortgageOutcome = processMortgagePayments(
+    updatedPortfolio,
+    monthsElapsed,
+    state.balance + balanceChange
+  );
+
+  updatedPortfolio = mortgageOutcome.properties;
+  balanceChange -= mortgageOutcome.totalPaid;
+  balanceChange += mortgageOutcome.netProceeds;
+
+  if (mortgageOutcome.totalPaid > 0) {
+    nextState = addHistory(
+      nextState,
+      `Mortgage payments this month totalled ${formatCurrency(mortgageOutcome.totalPaid)}.`
+    );
+  }
+
+  if (mortgageOutcome.mortgagesCleared.length > 0) {
+    const clearedNames = mortgageOutcome.mortgagesCleared.join(', ');
+    const prefix = mortgageOutcome.mortgagesCleared.length > 1 ? 'Mortgages fully repaid' : 'Mortgage fully repaid';
+    nextState = addHistory(nextState, `${prefix}: ${clearedNames}.`);
+  }
+
+  mortgageOutcome.variableTransitions.forEach(({ propertyName, baseRate, margin, reversionRate }) => {
+    const rateLabel = formatInterestRate(reversionRate);
+    const baseLabel = Number.isFinite(baseRate) ? formatInterestRate(baseRate) : null;
+    const marginLabel = Number.isFinite(margin) ? formatInterestRate(margin) : null;
+    let message = `${propertyName} mortgage reverted to variable rate at ${rateLabel}`;
+    if (baseLabel && marginLabel) {
+      message += ` (${baseLabel} base + ${marginLabel} margin).`;
+    } else if (marginLabel) {
+      message += ` (${marginLabel} margin applied).`;
+    } else {
+      message += '.';
+    }
+    nextState = addHistory(nextState, message);
+  });
+
+  mortgageOutcome.forcedSales.forEach(({ propertyName, salePrice, outstanding, netProceeds }) => {
+    const resultText = netProceeds >= 0
+      ? `netted ${formatCurrency(netProceeds)}`
+      : `covered a shortfall of ${formatCurrency(Math.abs(netProceeds))}`;
+    nextState = addHistory(
+      nextState,
+      `Forced sale of ${propertyName}: Sold for ${formatCurrency(salePrice)} to settle ${formatCurrency(outstanding)} remaining on the interest-only mortgage and ${resultText}.`
+    );
+  });
+
+  const variableAdjustments = applyVariableRateAdjustments(updatedPortfolio, nextState.centralBankRate);
+  updatedPortfolio = variableAdjustments.properties;
+  variableAdjustments.history.forEach((message) => {
+    nextState = addHistory(nextState, message);
+  });
+
   nextState.portfolio = updatedPortfolio;
-  nextState.balance = Math.max(nextState.balance + balanceChange, 0);
+  nextState.balance = Math.max(state.balance + balanceChange, 0);
   nextState.lastRentCollectionDay = nextState.day;
 
   return nextState;

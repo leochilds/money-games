@@ -145,3 +145,156 @@ describe('getRentStrategies', () => {
     expect(shortLowPremium!.probability).toBeGreaterThan(longHighPremium!.probability);
   });
 });
+
+describe('mortgage processing', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    initialiseGame();
+  });
+
+  it('amortises repayment mortgage balances each month', () => {
+    const initialState = get(gameState);
+    const mortgage = {
+      depositRatio: 0.2,
+      deposit: 50_000,
+      principal: 200_000,
+      fixedPeriodYears: 2,
+      fixedPeriodMonths: 24,
+      interestOnly: false,
+      annualInterestRate: 0.04,
+      reversionRate: 0.05,
+      baseRate: initialState.centralBankRate,
+      variableRateMargin: 0.02,
+      variableRateActive: false,
+      monthlyPayment: 1_200,
+      monthlyInterestRate: 0.04 / 12,
+      remainingTermMonths: 360,
+      termMonths: 360,
+      remainingBalance: 200_000
+    } as const;
+
+    const property = createProperty({
+      id: 'amortise-test',
+      name: 'Amortise Test',
+      autoRelist: false,
+      tenant: null,
+      mortgage: { ...mortgage }
+    });
+
+    gameState.set({
+      ...initialState,
+      balance: 10_000,
+      portfolio: [property],
+      lastRentCollectionDay: initialState.day - 30
+    });
+
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+
+    tickDay();
+
+    const updated = get(gameState);
+    const updatedMortgage = updated.portfolio[0]?.mortgage;
+    expect(updatedMortgage?.remainingBalance).toBeLessThan(mortgage.remainingBalance);
+    expect(updatedMortgage?.remainingTermMonths).toBe(mortgage.remainingTermMonths - 1);
+  });
+
+  it('activates variable rates once the fixed period is completed', () => {
+    const initialState = get(gameState);
+    const mortgage = {
+      depositRatio: 0.25,
+      deposit: 60_000,
+      principal: 180_000,
+      fixedPeriodYears: 1,
+      fixedPeriodMonths: 1,
+      interestOnly: false,
+      annualInterestRate: 0.035,
+      reversionRate: 0.055,
+      baseRate: initialState.centralBankRate,
+      variableRateMargin: 0.02,
+      variableRateActive: false,
+      monthlyPayment: 1_100,
+      monthlyInterestRate: 0.035 / 12,
+      remainingTermMonths: 240,
+      termMonths: 240,
+      remainingBalance: 180_000
+    } as const;
+
+    const property = createProperty({
+      id: 'variable-test',
+      name: 'Variable Test',
+      autoRelist: false,
+      tenant: null,
+      mortgage: { ...mortgage }
+    });
+
+    gameState.set({
+      ...initialState,
+      balance: 20_000,
+      portfolio: [property],
+      lastRentCollectionDay: initialState.day - 30
+    });
+
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+
+    tickDay();
+
+    const updated = get(gameState);
+    const updatedMortgage = updated.portfolio[0]?.mortgage;
+    expect(updatedMortgage?.variableRateActive).toBe(true);
+    const expectedRate = updated.centralBankRate + mortgage.variableRateMargin;
+    expect(updatedMortgage?.annualInterestRate).toBeCloseTo(expectedRate, 6);
+    const activationLogged = updated.history.some((entry) =>
+      entry.message.includes('Variable Test mortgage reverted to variable rate')
+    );
+    expect(activationLogged).toBe(true);
+  });
+
+  it('forces a sale when an interest-only balloon cannot be paid', () => {
+    const initialState = get(gameState);
+    const mortgage = {
+      depositRatio: 0.1,
+      deposit: 30_000,
+      principal: 270_000,
+      fixedPeriodYears: 1,
+      fixedPeriodMonths: 12,
+      interestOnly: true,
+      annualInterestRate: 0.04,
+      reversionRate: 0.05,
+      baseRate: initialState.centralBankRate,
+      variableRateMargin: 0.01,
+      variableRateActive: true,
+      monthlyPayment: 900,
+      monthlyInterestRate: 0.04 / 12,
+      remainingTermMonths: 0,
+      termMonths: 240,
+      remainingBalance: 50_000
+    } as const;
+
+    const property = createProperty({
+      id: 'balloon-test',
+      name: 'Balloon Test',
+      autoRelist: false,
+      tenant: null,
+      maintenancePercent: 80,
+      baseValue: 200_000,
+      mortgage: { ...mortgage }
+    });
+
+    gameState.set({
+      ...initialState,
+      balance: 5_000,
+      portfolio: [property],
+      lastRentCollectionDay: initialState.day - 30
+    });
+
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+
+    tickDay();
+
+    const updated = get(gameState);
+    expect(updated.portfolio).toHaveLength(0);
+    const lastHistory = updated.history[updated.history.length - 1]?.message ?? '';
+    expect(lastHistory).toContain('Forced sale of Balloon Test');
+    expect(updated.balance).toBeGreaterThan(initialState.balance);
+  });
+});
