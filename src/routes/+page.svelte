@@ -34,6 +34,7 @@
     setPropertyRentPremium,
     setPropertyAutoRelist,
     setPropertyMarketingPaused,
+    schedulePropertyMaintenance,
     selectFinanceDeposit,
     selectFinanceTerm,
     selectFinanceFixedPeriod,
@@ -144,6 +145,13 @@
     }
   }
 
+  function handleMaintenanceScheduleEvent(event: CustomEvent<{ propertyId: string }>) {
+    const { propertyId } = event.detail ?? {};
+    if (propertyId) {
+      schedulePropertyMaintenance(propertyId);
+    }
+  }
+
   function handleFinanceConfirm() {
     confirmFinance();
   }
@@ -214,11 +222,13 @@
   propertyId={$managementView.propertyId}
   isOwned={$managementView.isOwned}
   leasingControls={$managementView.leasingControls}
+  maintenanceState={$managementView.maintenanceState}
   on:sectionchange={handleManagementSectionChange}
   on:leasechange={handleLeaseChangeEvent}
   on:rentchange={handleRentChangeEvent}
   on:autorelisttoggle={handleAutoRelistToggleEvent}
   on:marketingtoggle={handleMarketingToggleEvent}
+  on:maintenanceschedule={handleMaintenanceScheduleEvent}
   on:hide={closeManagement}
 />
 

@@ -1,8 +1,12 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
 
-  import type { ManagementLeasingControls } from '$lib/stores/game';
-  import { formatCurrency, formatPercentage } from '$lib/utils';
+  import {
+    createEmptyMaintenanceState,
+    type ManagementLeasingControls,
+    type ManagementMaintenanceState
+  } from '$lib/stores/game';
+  import { formatCurrency, formatLeaseCountdown, formatPercentage } from '$lib/utils';
 
   type BootstrapModal = {
     show: () => void;
@@ -18,6 +22,7 @@
     rentchange: { propertyId: string; rateOffset: number };
     autorelisttoggle: { propertyId: string; enabled: boolean };
     marketingtoggle: { propertyId: string; paused: boolean };
+    maintenanceschedule: { propertyId: string };
   }>();
 
   const emptyLeasingControls: ManagementLeasingControls = {
@@ -31,6 +36,7 @@
     marketingPaused: false,
     hasTenant: false
   };
+  const emptyMaintenanceState: ManagementMaintenanceState = createEmptyMaintenanceState();
 
   let {
     open = false,
@@ -44,7 +50,8 @@
     maintenanceHtml = '',
     propertyId = '',
     isOwned = false,
-    leasingControls = emptyLeasingControls
+    leasingControls = emptyLeasingControls,
+    maintenanceState = emptyMaintenanceState
   } = $props();
 
   let modalElement: HTMLDivElement | null = null;
@@ -144,6 +151,57 @@
     leasingControls.plans.find((plan) => plan.id === leasingControls.selectedPlanId) ?? null
   );
 
+  function formatPercentValue(value: number): string {
+    return formatPercentage((value ?? 0) / 100);
+  }
+
+  const maintenanceProgressPercent = $derived.by(() =>
+    Math.max(Math.min(maintenanceState.maintenancePercent ?? 0, 100), 0)
+  );
+  const maintenanceConditionLabel = $derived.by(
+    () => `Condition: ${Math.round(maintenanceState.maintenancePercent ?? 0)}%`
+  );
+  const maintenanceWorkNote = $derived.by(() => {
+    if (!maintenanceState.work) {
+      return '';
+    }
+    const costLabel = formatCurrency(maintenanceState.work.cost ?? 0);
+    if (maintenanceState.workDelayMonths > 0) {
+      const delayLabel = formatLeaseCountdown(maintenanceState.workDelayMonths);
+      return `Maintenance scheduled to begin after the current lease (${delayLabel} remaining). Estimated downtime 1 month (cost ${costLabel}).`;
+    }
+    const monthsRemaining = Math.max(maintenanceState.work.monthsRemaining ?? 0, 0);
+    return `Maintenance underway: ${monthsRemaining} month(s) remaining (cost ${costLabel}). Property is temporarily vacant.`;
+  });
+  const maintenanceScheduleNote = $derived.by(() => {
+    if (!isOwned) {
+      return 'Maintenance scheduling becomes available once the property is owned.';
+    }
+    if (maintenanceState.reasons.atMaxMaintenance) {
+      return 'Property already at 100% maintenance.';
+    }
+    if (maintenanceState.reasons.alreadyScheduled) {
+      return maintenanceState.workDelayMonths > 0
+        ? 'Maintenance already scheduled to begin after the current lease.'
+        : 'Maintenance already scheduled.';
+    }
+    if (maintenanceState.reasons.insufficientFunds) {
+      return `Requires ${formatCurrency(maintenanceState.projectedCost)}, but balance is insufficient.`;
+    }
+    if (maintenanceState.tenantMonthsRemaining > 0 && maintenanceState.leaseCountdownLabel) {
+      const percentLabel = formatPercentValue(maintenanceState.projectedPercent);
+      return `Estimated cost ${formatCurrency(maintenanceState.projectedCost)} (condition forecast to reach ${percentLabel} once work begins after ${maintenanceState.leaseCountdownLabel}).`;
+    }
+    return `Estimated cost ${formatCurrency(maintenanceState.projectedCost)} (paid upfront).`;
+  });
+  const maintenanceScheduleDisabled = $derived.by(
+    () => !isOwned || !maintenanceState.canSchedule
+  );
+  const maintenanceThresholdNote = $derived.by(
+    () =>
+      `Schedule refurbishments once the maintenance level falls below ${formatPercentValue(maintenanceState.maintenanceThreshold)}.`
+  );
+
   function formatPremium(value: number): string {
     return `${(value * 100).toFixed(1)}%`;
   }
@@ -206,6 +264,13 @@
       return;
     }
     dispatch('marketingtoggle', { propertyId, paused: input.checked });
+  }
+
+  function handleMaintenanceSchedule() {
+    if (!propertyId || !isOwned || !maintenanceState.canSchedule) {
+      return;
+    }
+    dispatch('maintenanceschedule', { propertyId });
   }
 </script>
 
@@ -446,6 +511,41 @@
             >
               <div id="managementMaintenance">
                 {@html maintenanceHtml}
+                <div class="section-card">
+                  <h6>Maintenance planning</h6>
+                  <div class="mb-3">
+                    <div class="small fw-semibold mb-1">{maintenanceConditionLabel}</div>
+                    <div
+                      class="management-progress"
+                      role="progressbar"
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow={maintenanceProgressPercent}
+                    >
+                      <div
+                        class="management-progress-bar"
+                        style={`width: ${maintenanceProgressPercent}%`}
+                      ></div>
+                    </div>
+                  </div>
+                  {#if maintenanceWorkNote}
+                    <p class="management-note mb-3">{maintenanceWorkNote}</p>
+                  {/if}
+                  {#if isOwned}
+                    <button
+                      type="button"
+                      class="btn btn-outline-secondary"
+                      disabled={maintenanceScheduleDisabled}
+                      onclick={handleMaintenanceSchedule}
+                    >
+                      Schedule maintenance
+                    </button>
+                    <div class="management-note mt-3">{maintenanceScheduleNote}</div>
+                  {:else}
+                    <div class="management-note">{maintenanceScheduleNote}</div>
+                  {/if}
+                  <div class="management-note mt-3 text-muted">{maintenanceThresholdNote}</div>
+                </div>
               </div>
             </div>
           </div>
