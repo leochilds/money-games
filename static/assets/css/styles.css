@@ -1,0 +1,242 @@
+body {
+  min-height: 100vh;
+}
+
+.history-log {
+  max-height: 320px;
+  overflow-y: auto;
+  font-family: "Fira Code", "Courier New", monospace;
+  font-size: 0.95rem;
+}
+
+.income-status-body {
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.badge-variable-rate {
+  background-color: #ffe08a;
+  color: #5c4400;
+  border: 1px solid rgba(92, 68, 0, 0.35);
+  box-shadow: 0 0.25rem 0.5rem rgba(92, 68, 0, 0.15);
+  letter-spacing: 0.08em;
+  font-size: 0.65rem;
+}
+
+.list-group-item.variable-rate-mortgage {
+  border-left: 4px solid #f7b731;
+  background-image: linear-gradient(
+    90deg,
+    rgba(247, 183, 49, 0.18),
+    rgba(247, 183, 49, 0.05) 55%,
+    transparent
+  );
+}
+
+.property-card.owned {
+  border: 2px solid #198754;
+  box-shadow: 0 0 0.5rem rgba(25, 135, 84, 0.35);
+}
+
+.property-card .btn:disabled {
+  cursor: not-allowed;
+}
+
+#propertyList {
+  max-height: 65vh;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+  padding-bottom: 0.5rem;
+}
+
+#playerBalance {
+  font-size: 1.5rem;
+}
+
+#centralBankRate {
+  font-variant-numeric: tabular-nums;
+}
+
+.list-group-item + .list-group-item {
+  border-top: 1px dashed rgba(0, 0, 0, 0.1);
+}
+
+.management-modal .modal-header {
+  align-items: flex-start;
+}
+
+.management-summary {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.management-summary .management-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.management-layout {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.management-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 200px;
+}
+
+.management-nav-link {
+  border: 1px solid rgba(0, 0, 0, 0.125);
+  border-radius: 0.5rem;
+  background: #f8f9fa;
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.management-nav-link:hover,
+.management-nav-link:focus {
+  background: #e9f2ff;
+  color: #0d6efd;
+  outline: none;
+}
+
+.management-nav-link.active {
+  background: #0d6efd;
+  color: #fff;
+  box-shadow: 0 0.125rem 0.5rem rgba(13, 110, 253, 0.3);
+}
+
+.management-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.management-section {
+  display: none;
+}
+
+.management-section.active {
+  display: block;
+}
+
+.management-section .section-card {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 0.25rem 0.5rem rgba(0, 0, 0, 0.05);
+}
+
+.management-section .section-card h6 {
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.5rem;
+  color: #6c757d;
+}
+
+.management-grid-two {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.management-progress {
+  height: 0.75rem;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.management-progress-bar {
+  background: linear-gradient(90deg, #0d6efd, #0b5ed7);
+  height: 100%;
+}
+
+.management-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.management-note {
+  font-size: 0.9rem;
+  color: #6c757d;
+}
+
+.management-finance-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.management-finance-preview {
+  background: #f8f9fa;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+
+.management-empty-state {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: #6c757d;
+  border: 1px dashed rgba(0, 0, 0, 0.15);
+  border-radius: 0.75rem;
+  background: #fff;
+}
+
+.management-summary-stats {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.management-summary-stats .stat-card {
+  background: #fff;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  padding: 0.75rem 1rem;
+  box-shadow: 0 0.125rem 0.35rem rgba(0, 0, 0, 0.05);
+}
+
+.management-summary-stats .stat-card h6 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6c757d;
+  margin-bottom: 0.25rem;
+}
+
+.management-summary-stats .stat-card strong {
+  font-size: 1.05rem;
+}
+
+@media (max-width: 576px) {
+  #playerBalance {
+    font-size: 1.2rem;
+  }
+
+  .management-layout {
+    flex-direction: column;
+  }
+
+  .management-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .management-nav-link {
+    flex: 1 1 45%;
+    text-align: center;
+  }
+}

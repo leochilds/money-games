@@ -1,52 +1,35 @@
-# Money Games - Property Tycoon
+# Money Games
 
-A lightweight, client-side property management mini-game built for GitHub Pages. Grow your rental empire by purchasing properties, collecting rent, and balancing your cash flow.
+This project is now powered by [SvelteKit](https://kit.svelte.dev/). The previous static site lives under [`legacy/`](legacy/) for reference while the new application is implemented.
 
-## Gameplay overview
-
-- **Starting funds:** $1,000 and one in-game day already underway.
-- **Goal:** Purchase properties to increase the rent you earn at the end of every day.
-- **Passive income:** Owned properties automatically generate rent during each tick (in-game day).
-- **History log:** Track purchases, income, and system events in the activity panel.
-
-## Controls and UI
-
-The interface is split into three primary sections:
-
-1. **Player overview**
-   - Shows current day, cash balance, and total rent per in-game day.
-   - Game speed selector (`0.5×`, `1×`, `2×`, `4×`) adjusts how quickly days pass in real time.
-   - Reset button returns the game to day 1 with the initial $1,000 capital.
-2. **Property portfolio**
-   - Displays each available property with its cost, rent yield, and flavour text.
-   - Buttons become disabled once a property is owned or if you lack funds for the purchase.
-3. **Rental income status & activity history**
-   - Owned properties are summarised with their current rent output.
-   - A live-updating feed lists rent events, speed changes, resets, and purchases.
-
-## How rent and days work
-
-- Every real-world second (or faster/slower if you change speed) advances the game by one day.
-- Rent collected per tick equals the sum of rent from all owned properties and is automatically added to your balance.
-- Attempts to purchase a property without enough cash are logged to the activity history for quick troubleshooting.
-
-## Running locally
-
-Because the game is a static HTML page, no build tools are required:
+## Getting started
 
 ```bash
-# Serve locally with any static HTTP server
-python3 -m http.server
+npm install
+npm run dev
 ```
 
-Then browse to `http://localhost:8000` to play. All assets load from the repository and CDN, so no backend or API keys are necessary.
+By default the development server is available at [http://localhost:5173](http://localhost:5173).
 
-## Deployment
+## Linting and type checking
 
-The included GitHub Actions workflow (`.github/workflows/static.yml`) uploads the repository contents directly to GitHub Pages. No extra build steps are needed—committing the HTML, CSS, and JavaScript files is sufficient for deployment.
+```bash
+npm run lint
+npm run check
+```
 
-## Customisation ideas
+Both commands are also run in CI before deployment.
 
-- Add more properties or tune costs/rents inside `assets/js/game.js`.
-- Extend the CSS theme in `assets/css/styles.css` to match your brand.
-- Track additional metrics (e.g., net worth, ROI) or introduce property upgrades.
+## Building for production
+
+```bash
+npm run build
+```
+
+The static adapter writes the final site to the `build/` directory. When deploying to GitHub Pages from a project subpath you can configure the base path using the `BASE_PATH` environment variable:
+
+```bash
+BASE_PATH=/money-games npm run build
+```
+
+The provided GitHub Actions workflow already sets this variable to the repository name for project pages deployments.
