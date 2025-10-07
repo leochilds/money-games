@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import type { Snippet } from 'svelte';
   import favicon from '$lib/assets/favicon.svg';
+  import '../app.css';
 
   let { children }: { children?: Snippet } = $props();
 
