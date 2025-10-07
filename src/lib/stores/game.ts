@@ -2,8 +2,10 @@ import { derived, get, writable } from 'svelte/store';
 import {
   FINANCE_CONFIG,
   MAINTENANCE_CONFIG,
+  MARKET_CONFIG,
   defaultProperties,
   featureAddOns as FEATURE_ADD_ONS,
+  proceduralPropertyArchetypes,
   propertyTypeMultipliers,
   type PropertyDefinition
 } from '$lib/config';
@@ -13,7 +15,11 @@ import {
   formatInterestRate,
   formatLeaseCountdown,
   formatPercentage,
-  formatPropertyType
+  formatPropertyType,
+  getRandomInt,
+  getRandomNumber,
+  pickRandom,
+  selectFeatureSubset
 } from '$lib/utils';
 
 type RentPlan = {
@@ -60,6 +66,9 @@ type GameProperty = PropertyDefinition & {
   autoRelist: boolean;
   rentalMarketingPausedForMaintenance: boolean;
   maintenanceWork: MaintenanceWorkOrder | null;
+  marketAge: number;
+  introducedOnDay: number;
+  vacancyMonths: number;
 };
 
 export type ManagementLeasingControls = {
@@ -131,6 +140,7 @@ type GameState = {
   portfolio: GameProperty[];
   history: HistoryEvent[];
   lastCentralBankAdjustmentDay: number;
+  lastMarketGenerationDay: number;
   lastRentCollectionDay: number;
   finance: FinanceState;
   management: ManagementState;
@@ -235,6 +245,21 @@ function calculateMonthlyRentEstimate(cost: number, demandScore: number): number
   return Math.max(Math.round(baseRent + demandPremium), 0);
 }
 
+function clampDemandScore(score: number): number {
+  if (!Number.isFinite(score)) {
+    return 5;
+  }
+  return Math.min(Math.max(score, 1), 10);
+}
+
+function mapDemandToAnnualYield(demandScore: number): number {
+  const minYield = 0.03;
+  const maxYield = 0.08;
+  const clamped = clampDemandScore(demandScore);
+  const progression = (clamped - 1) / 9;
+  return minYield + progression * (maxYield - minYield);
+}
+
 function getTenantMonthsRemaining(property: GameProperty): number {
   const remaining = property.tenant?.leaseMonthsRemaining ?? 0;
   if (!Number.isFinite(remaining)) {
@@ -294,26 +319,233 @@ function getInitialMaintenancePercent(preferred?: number): number {
   return clampMaintenancePercent((minPercent + maxPercent) / 2);
 }
 
-function createInitialProperty(definition: PropertyDefinition): GameProperty {
+function deriveMaintenancePercent(
+  range: readonly [number, number] | undefined,
+  fallback: number
+): number {
+  if (Array.isArray(range) && range.length === 2) {
+    const [min, max] = range;
+    const lower = Number.isFinite(min) ? min : fallback;
+    const upper = Number.isFinite(max) ? max : fallback;
+    if (Number.isFinite(lower) && Number.isFinite(upper) && lower < upper) {
+      return clampMaintenancePercent(getRandomInt(lower, upper));
+    }
+  }
+  return getInitialMaintenancePercent(fallback);
+}
+
+function createInitialProperty(definition: PropertyDefinition, day = 1): GameProperty {
   const baseValue = calculatePropertyValue(definition);
   const maintenancePercent = getInitialMaintenancePercent(definition.maintenancePercent);
   const cost = calculateMaintenanceAdjustedValue(baseValue, maintenancePercent);
   const monthlyRentEstimate = calculateMonthlyRentEstimate(cost, definition.demandScore);
-  const rentPlanId = buildRentPlanId(LEASE_LENGTH_CHOICES[1], RENT_RATE_OFFSETS[1]);
-
-  return {
+  const placeholder: GameProperty = {
     ...definition,
     baseValue,
     cost,
     maintenancePercent,
     monthlyRentEstimate,
-    rentPlanId,
+    rentPlanId: '',
     tenant: null,
     mortgage: null,
     autoRelist: true,
     rentalMarketingPausedForMaintenance: false,
-    maintenanceWork: null
+    maintenanceWork: null,
+    marketAge: 0,
+    introducedOnDay: day,
+    vacancyMonths: 0
   };
+
+  const plans = getRentStrategies(placeholder);
+  const preferredPlan =
+    plans.find(
+      (plan) =>
+        plan.leaseMonths === LEASE_LENGTH_CHOICES[1] &&
+        Math.abs(plan.rateOffset - RENT_RATE_OFFSETS[1]) < 1e-6
+    ) ?? plans[0];
+  const rentPlanId = preferredPlan?.id ?? buildRentPlanId(LEASE_LENGTH_CHOICES[1], RENT_RATE_OFFSETS[1]);
+
+  return { ...placeholder, rentPlanId };
+}
+
+function generateProceduralPropertyId(): string {
+  const cryptoApi =
+    typeof globalThis !== 'undefined'
+      ? (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
+      : undefined;
+  if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
+    return `proc-${cryptoApi.randomUUID()}`;
+  }
+  return `proc-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createProceduralProperty(state: GameState): GameProperty {
+  const archetype = pickRandom(proceduralPropertyArchetypes);
+  const bedrooms = getRandomInt(archetype.bedroomsRange[0], archetype.bedroomsRange[1]);
+  const bathrooms = getRandomInt(archetype.bathroomsRange[0], archetype.bathroomsRange[1]);
+  const demandScore = getRandomInt(archetype.demandRange[0], archetype.demandRange[1]);
+  const location = {
+    proximity: getRandomNumber(archetype.proximityRange[0], archetype.proximityRange[1], 2),
+    schoolRating: getRandomInt(archetype.schoolRange[0], archetype.schoolRange[1]),
+    crimeScore: getRandomInt(archetype.crimeRange[0], archetype.crimeRange[1])
+  };
+
+  const baseDefinition: PropertyDefinition = {
+    id: generateProceduralPropertyId(),
+    name: pickRandom(archetype.names),
+    description: pickRandom(archetype.descriptions),
+    propertyType: archetype.propertyType,
+    bedrooms,
+    bathrooms,
+    features: selectFeatureSubset(archetype.featuresPool),
+    locationDescriptor: pickRandom(archetype.locationDescriptors),
+    demandScore,
+    location
+  };
+
+  const baseValue = calculatePropertyValue(baseDefinition);
+  const maintenanceBaseline = getInitialMaintenancePercent();
+  const maintenancePercent = deriveMaintenancePercent(archetype.maintenancePercentRange, maintenanceBaseline);
+  const cost = calculateMaintenanceAdjustedValue(baseValue, maintenancePercent);
+  const monthlyRentEstimate = calculateMonthlyRentEstimate(cost, demandScore);
+
+  const provisional: GameProperty = {
+    ...baseDefinition,
+    baseValue,
+    cost,
+    maintenancePercent,
+    monthlyRentEstimate,
+    rentPlanId: '',
+    tenant: null,
+    mortgage: null,
+    autoRelist: true,
+    rentalMarketingPausedForMaintenance: false,
+    maintenanceWork: null,
+    marketAge: 0,
+    introducedOnDay: state.day,
+    vacancyMonths: 0
+  };
+
+  const plans = getRentStrategies(provisional);
+  const targetPlan =
+    plans.find(
+      (plan) =>
+        plan.leaseMonths === LEASE_LENGTH_CHOICES[1] &&
+        Math.abs(plan.rateOffset - RENT_RATE_OFFSETS[1]) < 1e-6
+    ) ?? plans[0];
+  const rentPlanId = targetPlan?.id ?? buildRentPlanId(LEASE_LENGTH_CHOICES[1], RENT_RATE_OFFSETS[1]);
+
+  const inheritedChance = 0.25 + (clampDemandScore(demandScore) / 10) * 0.35;
+  const hasInheritedTenant = Math.random() < Math.min(Math.max(inheritedChance, 0), 0.75);
+
+  let tenant: Tenant | null = null;
+  let vacancyMonths = 0;
+  if (hasInheritedTenant) {
+    const planForTenant = targetPlan ?? plans[0] ?? null;
+    const tenantRent = planForTenant
+      ? planForTenant.monthlyRent
+      : Math.round((cost * mapDemandToAnnualYield(demandScore)) / 12);
+    const baseLease = planForTenant?.leaseMonths ?? 12;
+    const minLease = Math.max(baseLease - 3, 6);
+    const maxLease = baseLease + 6;
+    const leaseMonths = getRandomInt(minLease, maxLease);
+    tenant = {
+      leaseMonthsRemaining: leaseMonths,
+      monthlyRent: tenantRent
+    };
+    vacancyMonths = 0;
+  } else {
+    vacancyMonths = getRandomInt(0, 2);
+  }
+
+  return {
+    ...provisional,
+    rentPlanId,
+    tenant,
+    vacancyMonths
+  };
+}
+
+function generateMarketListings(
+  state: GameState,
+  count = 1
+): { state: GameState; newListings: GameProperty[] } {
+  if (state.market.length >= MARKET_CONFIG.maxSize) {
+    return { state, newListings: [] };
+  }
+
+  const slotsAvailable = Math.max(MARKET_CONFIG.maxSize - state.market.length, 0);
+  const listingsToGenerate = Math.min(count, slotsAvailable);
+  if (listingsToGenerate <= 0) {
+    return { state, newListings: [] };
+  }
+
+  const newListings: GameProperty[] = [];
+  const market = [...state.market];
+  for (let index = 0; index < listingsToGenerate; index += 1) {
+    const property = createProceduralProperty(state);
+    newListings.push(property);
+    market.push(property);
+  }
+
+  return { state: { ...state, market }, newListings };
+}
+
+function progressMarketListings(state: GameState): GameState {
+  const retained: GameProperty[] = [];
+  const expired: GameProperty[] = [];
+
+  state.market.forEach((property) => {
+    const currentAge = (property.marketAge ?? 0) + 1;
+    if (currentAge > MARKET_CONFIG.maxAge) {
+      expired.push(property);
+      return;
+    }
+    retained.push({ ...property, marketAge: currentAge });
+  });
+
+  let nextState: GameState = { ...state, market: retained };
+
+  if (expired.length > 0) {
+    const removedNames = expired.map((property) => property.name).join(', ');
+    const message =
+      expired.length > 1
+        ? `Listings expired and left the market: ${removedNames}.`
+        : `Listing expired and left the market: ${removedNames}.`;
+    nextState = addHistory(nextState, message);
+  }
+
+  const daysSinceGeneration = nextState.day - nextState.lastMarketGenerationDay;
+  const spaceAvailable = Math.max(MARKET_CONFIG.maxSize - nextState.market.length, 0);
+  const readyForNewListings = daysSinceGeneration >= MARKET_CONFIG.generationInterval;
+
+  let requiredListings = 0;
+  if (readyForNewListings && spaceAvailable > 0) {
+    const minimumShortfall = Math.max(MARKET_CONFIG.minSize - nextState.market.length, 0);
+    if (minimumShortfall > 0) {
+      requiredListings = minimumShortfall;
+    } else {
+      const batchSize = Math.max(MARKET_CONFIG.batchSize, 1);
+      requiredListings = getRandomInt(1, batchSize);
+    }
+  }
+
+  const listingsNeeded = Math.min(requiredListings, spaceAvailable);
+  if (listingsNeeded > 0) {
+    const result = generateMarketListings(nextState, listingsNeeded);
+    nextState = result.state;
+    if (result.newListings.length > 0) {
+      const newNames = result.newListings.map((property) => property.name).join(', ');
+      const message =
+        result.newListings.length > 1
+          ? `New listings have entered the market: ${newNames}.`
+          : `New listing has entered the market: ${newNames}.`;
+      nextState = addHistory(nextState, message);
+      nextState = { ...nextState, lastMarketGenerationDay: nextState.day };
+    }
+  }
+
+  return nextState;
 }
 
 function buildRentPlanId(leaseMonths: number, rateOffset: number): string {
@@ -627,6 +859,7 @@ function createInitialState(): GameState {
     portfolio: [],
     history: [],
     lastCentralBankAdjustmentDay: 0,
+    lastMarketGenerationDay: 0,
     lastRentCollectionDay: 0,
     finance: {
       open: false,
@@ -1145,6 +1378,7 @@ export function setGameSpeed(value: number): void {
 export function tickDay(): void {
   gameState.update((state) => {
     let nextState = { ...state, day: state.day + 1 };
+    nextState = progressMarketListings(nextState);
     nextState = degradeAllProperties(nextState);
     if (nextState.day - nextState.lastRentCollectionDay >= 30) {
       nextState = processMonthlyTick(nextState);
