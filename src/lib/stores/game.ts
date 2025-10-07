@@ -2291,3 +2291,12 @@ export function sellProperty(propertyId: string): void {
   });
 }
 
+export const __testing = {
+  clampMaintenancePercent,
+  calculateMaintenanceAdjustedValue,
+  calculateMonthlyRentEstimate,
+  calculatePropertyValue,
+  getMaintenanceThreshold,
+  hasActiveMaintenanceWork
+};
+
