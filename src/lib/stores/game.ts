@@ -183,6 +183,9 @@ const MINIMUM_DEPOSIT_RATIO = Math.min(...FINANCE_CONFIG.depositOptions);
 const RENT_RATE_OFFSETS = [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1];
 const LEASE_LENGTH_CHOICES = [6, 12, 18, 24, 36];
 
+let pauseDepth = 0;
+let pausedBeforeModal = false;
+
 let historyIdCounter = 1;
 
 function createEmptyLeasingControls(): ManagementLeasingControls {
@@ -1833,10 +1836,14 @@ function createStateWithInitialHistory(logResetMessage: boolean): GameState {
 }
 
 export function initialiseGame(): void {
+  pauseDepth = 0;
+  pausedBeforeModal = false;
   gameState.set(createStateWithInitialHistory(false));
 }
 
 export function resetGame(): void {
+  pauseDepth = 0;
+  pausedBeforeModal = false;
   gameState.set(createStateWithInitialHistory(true));
 }
 
@@ -1864,11 +1871,27 @@ export function tickDay(): void {
 }
 
 export function pauseGame(): void {
-  gameState.update((state) => ({ ...state, isPaused: true }));
+  if (pauseDepth === 0) {
+    pausedBeforeModal = get(gameState).isPaused;
+  }
+
+  pauseDepth += 1;
+  if (pauseDepth === 1) {
+    gameState.update((state) => (state.isPaused ? state : { ...state, isPaused: true }));
+  }
 }
 
 export function resumeGame(): void {
-  gameState.update((state) => ({ ...state, isPaused: false }));
+  if (pauseDepth === 0) {
+    return;
+  }
+
+  pauseDepth -= 1;
+  if (pauseDepth === 0) {
+    gameState.update((state) =>
+      state.isPaused === pausedBeforeModal ? state : { ...state, isPaused: pausedBeforeModal }
+    );
+  }
 }
 
 export function openManagement(propertyId: string): void {

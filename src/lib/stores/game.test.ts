@@ -3,7 +3,16 @@ import { get } from 'svelte/store';
 
 import { MAINTENANCE_CONFIG, MARKET_CONFIG } from '$lib/config';
 import { formatCurrency } from '$lib/utils';
-import { gameState, getRentStrategies, initialiseGame, sellProperty, tickDay } from './game';
+import {
+  gameState,
+  getRentStrategies,
+  initialiseGame,
+  isPaused,
+  pauseGame,
+  resumeGame,
+  sellProperty,
+  tickDay
+} from './game';
 
 type TestProperty = Parameters<typeof getRentStrategies>[0];
 
@@ -297,6 +306,51 @@ describe('mortgage processing', () => {
     const lastHistory = updated.history[updated.history.length - 1]?.message ?? '';
     expect(lastHistory).toContain('Forced sale of Balloon Test');
     expect(updated.balance).toBeGreaterThan(initialState.balance);
+  });
+});
+
+describe('modal-driven pause management', () => {
+  beforeEach(() => {
+    initialiseGame();
+  });
+
+  it('pauses when a modal opens and resumes after the last modal closes', () => {
+    expect(get(isPaused)).toBe(false);
+
+    pauseGame();
+    expect(get(isPaused)).toBe(true);
+
+    resumeGame();
+    expect(get(isPaused)).toBe(false);
+  });
+
+  it('keeps the game paused while any modal remains open', () => {
+    pauseGame();
+    pauseGame();
+
+    expect(get(isPaused)).toBe(true);
+
+    resumeGame();
+    expect(get(isPaused)).toBe(true);
+
+    resumeGame();
+    expect(get(isPaused)).toBe(false);
+  });
+
+  it('restores the previous pause state when all modals close', () => {
+    const state = get(gameState);
+    gameState.set({ ...state, isPaused: true });
+
+    pauseGame();
+    pauseGame();
+
+    expect(get(isPaused)).toBe(true);
+
+    resumeGame();
+    expect(get(isPaused)).toBe(true);
+
+    resumeGame();
+    expect(get(isPaused)).toBe(true);
   });
 });
 
