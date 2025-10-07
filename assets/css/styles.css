@@ -9,6 +9,12 @@ body {
   font-size: 0.95rem;
 }
 
+.income-status-body {
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
 .badge-variable-rate {
   background-color: #ffe08a;
   color: #5c4400;
