@@ -48,6 +48,25 @@ type GameProperty = PropertyDefinition & {
   rentalMarketingPausedForMaintenance: boolean;
 };
 
+export type ManagementLeasingControls = {
+  plans: {
+    id: string;
+    label: string;
+    leaseMonths: number;
+    rateOffset: number;
+    monthlyRent: number;
+    probability: number;
+  }[];
+  leaseMonthsOptions: number[];
+  rentPremiumOptions: { value: number; label: string }[];
+  selectedPlanId: string;
+  selectedLeaseMonths: number;
+  selectedRateOffset: number;
+  autoRelist: boolean;
+  marketingPaused: boolean;
+  hasTenant: boolean;
+};
+
 type HistoryEvent = {
   id: string;
   day: number;
@@ -91,6 +110,20 @@ const RENT_RATE_OFFSETS = [-0.01, 0, 0.0125];
 const LEASE_LENGTH_CHOICES = [12, 18, 24];
 
 let historyIdCounter = 1;
+
+function createEmptyLeasingControls(): ManagementLeasingControls {
+  return {
+    plans: [],
+    leaseMonthsOptions: [],
+    rentPremiumOptions: [],
+    selectedPlanId: '',
+    selectedLeaseMonths: 0,
+    selectedRateOffset: 0,
+    autoRelist: false,
+    marketingPaused: false,
+    hasTenant: false
+  };
+}
 
 function formatPercent(value: number): string {
   return formatPercentage(value / 100);
@@ -182,6 +215,15 @@ function createInitialProperty(definition: PropertyDefinition): GameProperty {
 function buildRentPlanId(leaseMonths: number, rateOffset: number): string {
   const rateKey = Math.round(rateOffset * 1000);
   return `lease-${leaseMonths}-rate-${rateKey}`;
+}
+
+function findRentPlan(property: GameProperty, rentPlanId: string): RentPlan | undefined {
+  const plans = getRentStrategies(property);
+  return plans.find((plan) => plan.id === rentPlanId);
+}
+
+function formatRentPremiumLabel(rateOffset: number): string {
+  return `${(rateOffset * 100).toFixed(1)}%`;
 }
 
 function getRentStrategies(property: GameProperty): RentPlan[] {
@@ -309,7 +351,7 @@ function processMonthlyTick(state: GameState): GameState {
   let balanceChange = 0;
   const updatedPortfolio = nextState.portfolio.map((property) => {
     let updated = { ...property };
-    let historyMessages: string[] = [];
+    const historyMessages: string[] = [];
 
     if (updated.tenant) {
       balanceChange += updated.tenant.monthlyRent;
@@ -326,8 +368,12 @@ function processMonthlyTick(state: GameState): GameState {
           tenant: { ...updated.tenant, leaseMonthsRemaining: remaining }
         };
       }
+    } else if (updated.rentalMarketingPausedForMaintenance) {
+      historyMessages.push(`Marketing remains paused at ${updated.name} while maintenance is underway.`);
+    } else if (!updated.autoRelist) {
+      historyMessages.push(`Auto-relisting is disabled for ${updated.name}; no tenants were sourced this month.`);
     } else {
-    const plans = getRentStrategies(updated);
+      const plans = getRentStrategies(updated);
       const selectedPlan = plans.find((plan) => plan.id === updated.rentPlanId) ?? plans[0];
       const successChance = selectedPlan?.probability ?? 0.2;
       if (Math.random() < successChance) {
@@ -574,9 +620,14 @@ export const rentalItems = derived(gameState, ($state): RentalItem[] =>
         )}. <span class="${netClass}">${netLabel} ${formatCurrency(net)}</span>`
       };
     }
+    const marketingMessage = property.rentalMarketingPausedForMaintenance
+      ? 'Vacant — marketing paused for maintenance.'
+      : property.autoRelist
+        ? 'Vacant — marketing ongoing.'
+        : 'Vacant — auto-relist disabled.';
     return {
       id: `rental-${property.id}`,
-      contentHtml: `<strong>${property.name}:</strong> Vacant — marketing ongoing. Expected rent ${formatCurrency(
+      contentHtml: `<strong>${property.name}:</strong> ${marketingMessage} Expected rent ${formatCurrency(
         property.monthlyRentEstimate
       )}.`
     };
@@ -606,7 +657,10 @@ export const managementView = derived(gameState, ($state) => {
       leasingHtml: '',
       financingHtml: '',
       transactionsHtml: '',
-      maintenanceHtml: ''
+      maintenanceHtml: '',
+      propertyId: '',
+      isOwned: false,
+      leasingControls: createEmptyLeasingControls()
     };
   }
   const property =
@@ -622,7 +676,10 @@ export const managementView = derived(gameState, ($state) => {
       leasingHtml: '',
       financingHtml: '',
       transactionsHtml: '',
-      maintenanceHtml: ''
+      maintenanceHtml: '',
+      propertyId: '',
+      isOwned: false,
+      leasingControls: createEmptyLeasingControls()
     };
   }
 
@@ -652,13 +709,44 @@ export const managementView = derived(gameState, ($state) => {
     </div>
   `;
 
+  const rentPlans = getRentStrategies(property);
+  const selectedPlan =
+    rentPlans.find((plan) => plan.id === property.rentPlanId) ?? rentPlans[0] ?? null;
+  const marketingStatus = property.rentalMarketingPausedForMaintenance
+    ? 'Marketing paused for maintenance'
+    : property.autoRelist
+      ? 'Auto-relist enabled'
+      : 'Auto-relist disabled';
   const leasingHtml = `
     <div class="section-card">
       <h6>Leasing status</h6>
-      <p class="mb-2">${property.tenant ? 'Tenant secured' : 'Vacant — marketing active'}.</p>
-      <p class="mb-0">Expected monthly rent: <strong>${formatCurrency(
-        property.monthlyRentEstimate
-      )}</strong></p>
+      <p class="mb-2">${
+        property.tenant
+          ? 'Tenant secured and paying rent.'
+          : property.rentalMarketingPausedForMaintenance
+            ? 'Vacant — marketing is currently paused.'
+            : property.autoRelist
+              ? 'Vacant — marketing active.'
+              : 'Vacant — awaiting marketing instructions.'
+      }</p>
+      <dl class="row small text-muted mb-0">
+        <dt class="col-sm-4">Plan</dt>
+        <dd class="col-sm-8">${
+          selectedPlan
+            ? `${selectedPlan.leaseMonths}-month · ${formatRentPremiumLabel(selectedPlan.rateOffset)} premium`
+            : 'Standard listing'
+        }</dd>
+        <dt class="col-sm-4">Expected rent</dt>
+        <dd class="col-sm-8">${
+          selectedPlan ? formatCurrency(selectedPlan.monthlyRent) : formatCurrency(property.monthlyRentEstimate)
+        }</dd>
+        <dt class="col-sm-4">Tenant chance</dt>
+        <dd class="col-sm-8">${
+          selectedPlan ? formatPercentage(selectedPlan.probability) : '—'
+        } per month</dd>
+        <dt class="col-sm-4">Marketing</dt>
+        <dd class="col-sm-8">${marketingStatus}</dd>
+      </dl>
     </div>
   `;
 
@@ -695,6 +783,21 @@ export const managementView = derived(gameState, ($state) => {
     </div>
   `;
 
+  const plans = rentPlans.map((plan) => ({
+    id: plan.id,
+    label: plan.label,
+    leaseMonths: plan.leaseMonths,
+    rateOffset: plan.rateOffset,
+    monthlyRent: plan.monthlyRent,
+    probability: plan.probability
+  }));
+  const leaseMonthsOptions = Array.from(new Set(plans.map((plan) => plan.leaseMonths))).sort((a, b) => a - b);
+  const rentPremiumOptions = Array.from(new Set(plans.map((plan) => plan.rateOffset)))
+    .sort((a, b) => a - b)
+    .map((value) => ({ value, label: formatRentPremiumLabel(value) }));
+  const selectedLeaseMonths = selectedPlan?.leaseMonths ?? leaseMonthsOptions[0] ?? 0;
+  const selectedRateOffset = selectedPlan?.rateOffset ?? rentPremiumOptions[0]?.value ?? 0;
+
   return {
     open: true,
     activeSection: $state.management.activeSection,
@@ -704,7 +807,20 @@ export const managementView = derived(gameState, ($state) => {
     leasingHtml,
     financingHtml,
     transactionsHtml,
-    maintenanceHtml
+    maintenanceHtml,
+    propertyId: property.id,
+    isOwned: $state.portfolio.some((item) => item.id === property.id),
+    leasingControls: {
+      plans,
+      leaseMonthsOptions,
+      rentPremiumOptions,
+      selectedPlanId: selectedPlan?.id ?? '',
+      selectedLeaseMonths,
+      selectedRateOffset,
+      autoRelist: property.autoRelist,
+      marketingPaused: property.rentalMarketingPausedForMaintenance,
+      hasTenant: Boolean(property.tenant)
+    }
   };
 });
 
@@ -892,6 +1008,130 @@ export function setManagementSection(section: ManagementState['activeSection']):
       activeSection: section
     }
   }));
+}
+
+function updatePortfolioProperty(
+  state: GameState,
+  propertyId: string,
+  updater: (property: GameProperty) => GameProperty | null
+): { state: GameState; property: GameProperty | null; changed: boolean } {
+  const index = state.portfolio.findIndex((property) => property.id === propertyId);
+  if (index === -1) {
+    return { state, property: null, changed: false };
+  }
+  const property = state.portfolio[index];
+  const updated = updater(property);
+  if (!updated) {
+    return { state, property, changed: false };
+  }
+  const portfolio = [...state.portfolio];
+  portfolio[index] = updated;
+  return { state: { ...state, portfolio }, property: updated, changed: true };
+}
+
+export function setPropertyLeaseMonths(propertyId: string, leaseMonths: number): void {
+  if (!Number.isFinite(leaseMonths) || leaseMonths <= 0) {
+    return;
+  }
+  gameState.update((state) => {
+    const result = updatePortfolioProperty(state, propertyId, (property) => {
+      const plans = getRentStrategies(property);
+      const currentPlan =
+        plans.find((plan) => plan.id === property.rentPlanId) ?? plans[0] ?? null;
+      if (!currentPlan) {
+        return null;
+      }
+      const targetPlan =
+        plans.find(
+          (plan) =>
+            plan.leaseMonths === leaseMonths && Math.abs(plan.rateOffset - currentPlan.rateOffset) < 1e-6
+        ) ?? null;
+      if (!targetPlan || targetPlan.id === property.rentPlanId) {
+        return null;
+      }
+      return { ...property, rentPlanId: targetPlan.id };
+    });
+    if (!result.changed || !result.property) {
+      return result.state;
+    }
+    const plan = findRentPlan(result.property, result.property.rentPlanId);
+    if (!plan) {
+      return result.state;
+    }
+    const message = `Updated ${result.property.name} to a ${plan.leaseMonths}-month lease with a ${formatRentPremiumLabel(plan.rateOffset)} rent premium (expected rent ${formatCurrency(plan.monthlyRent)}).`;
+    return addHistory(result.state, message);
+  });
+}
+
+export function setPropertyRentPremium(propertyId: string, rateOffset: number): void {
+  if (!Number.isFinite(rateOffset)) {
+    return;
+  }
+  gameState.update((state) => {
+    const result = updatePortfolioProperty(state, propertyId, (property) => {
+      const plans = getRentStrategies(property);
+      const currentPlan =
+        plans.find((plan) => plan.id === property.rentPlanId) ?? plans[0] ?? null;
+      if (!currentPlan) {
+        return null;
+      }
+      const targetPlan =
+        plans.find(
+          (plan) =>
+            Math.abs(plan.rateOffset - rateOffset) < 1e-6 && plan.leaseMonths === currentPlan.leaseMonths
+        ) ?? null;
+      if (!targetPlan || targetPlan.id === property.rentPlanId) {
+        return null;
+      }
+      return { ...property, rentPlanId: targetPlan.id };
+    });
+    if (!result.changed || !result.property) {
+      return result.state;
+    }
+    const plan = findRentPlan(result.property, result.property.rentPlanId);
+    if (!plan) {
+      return result.state;
+    }
+    const premiumLabel = formatRentPremiumLabel(plan.rateOffset);
+    const message = `Adjusted rent premium for ${result.property.name} to ${premiumLabel} (${formatCurrency(plan.monthlyRent)} expected).`;
+    return addHistory(result.state, message);
+  });
+}
+
+export function setPropertyAutoRelist(propertyId: string, enabled: boolean): void {
+  gameState.update((state) => {
+    const result = updatePortfolioProperty(state, propertyId, (property) => {
+      if (property.autoRelist === enabled) {
+        return null;
+      }
+      return { ...property, autoRelist: enabled };
+    });
+    if (!result.changed || !result.property) {
+      return result.state;
+    }
+    const message = result.property.autoRelist
+      ? `Enabled auto-relisting for ${result.property.name}.`
+      : `Disabled auto-relisting for ${result.property.name}.`;
+    return addHistory(result.state, message);
+  });
+}
+
+export function setPropertyMarketingPaused(propertyId: string, paused: boolean): void {
+  gameState.update((state) => {
+    const result = updatePortfolioProperty(state, propertyId, (property) => {
+      if (property.rentalMarketingPausedForMaintenance === paused) {
+        return null;
+      }
+      return { ...property, rentalMarketingPausedForMaintenance: paused };
+    });
+    if (!result.changed || !result.property) {
+      return result.state;
+    }
+    const message = result.property.rentalMarketingPausedForMaintenance
+      ? `Paused marketing at ${result.property.name} for maintenance.`
+      : `Resumed tenant marketing at ${result.property.name}.`;
+    return addHistory(result.state, message);
+  });
 }
 
 export function openFinance(propertyId: string): void {
