@@ -32,6 +32,8 @@
     purchaseProperty,
     setManagementSection,
     closeManagement,
+    pauseGame,
+    resumeGame,
     setPropertyLeaseMonths,
     setPropertyRentPremium,
     setPropertyAutoRelist,
@@ -187,6 +189,20 @@
     cancelFinance();
   }
 
+  function handleModalShow() {
+    pauseGame();
+  }
+
+  function handleManagementHide() {
+    closeManagement();
+    resumeGame();
+  }
+
+  function handleFinanceHide() {
+    closeFinance();
+    resumeGame();
+  }
+
   onMount(() => {
     initialiseGame();
 
@@ -302,7 +318,8 @@
   on:marketingtoggle={handleMarketingToggleEvent}
   on:maintenanceschedule={handleMaintenanceScheduleEvent}
   on:sell={handleManagementSellEvent}
-  on:hide={closeManagement}
+  on:show={handleModalShow}
+  on:hide={handleManagementHide}
 />
 
 <FinanceModal
@@ -321,5 +338,6 @@
   on:paymenttypechange={handlePaymentTypeChangeEvent}
   on:confirm={handleFinanceConfirm}
   on:cancel={handleFinanceCancel}
-  on:hide={closeFinance}
+  on:show={handleModalShow}
+  on:hide={handleFinanceHide}
 />
