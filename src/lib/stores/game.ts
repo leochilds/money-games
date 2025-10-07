@@ -765,15 +765,23 @@ export const propertyCards = derived(gameState, ($state): PropertyCard[] => {
 
 export const rentalItems = derived(gameState, ($state): RentalItem[] =>
   $state.portfolio.map((property) => {
+    const manageAction = {
+      type: 'manage' as const,
+      label: 'Manage',
+      propertyId: property.id,
+      ariaLabel: `Manage ${property.name}`
+    };
     if (property.tenant) {
       const net = property.tenant.monthlyRent - (property.mortgage?.monthlyPayment ?? 0);
       const netLabel = net >= 0 ? 'Positive cash flow' : 'Negative cash flow';
       const netClass = net >= 0 ? 'text-success' : 'text-danger';
       return {
         id: `rental-${property.id}`,
+        propertyId: property.id,
         contentHtml: `<strong>${property.name}:</strong> Lease ${property.tenant.leaseMonthsRemaining} months remaining. Monthly rent ${formatCurrency(
           property.tenant.monthlyRent
-        )}. <span class="${netClass}">${netLabel} ${formatCurrency(net)}</span>`
+        )}. <span class="${netClass}">${netLabel} ${formatCurrency(net)}</span>`,
+        actions: [manageAction]
       };
     }
     const marketingMessage = property.rentalMarketingPausedForMaintenance
@@ -783,9 +791,11 @@ export const rentalItems = derived(gameState, ($state): RentalItem[] =>
         : 'Vacant — auto-relist disabled.';
     return {
       id: `rental-${property.id}`,
+      propertyId: property.id,
       contentHtml: `<strong>${property.name}:</strong> ${marketingMessage} Expected rent ${formatCurrency(
         property.monthlyRentEstimate
-      )}.`
+      )}.`,
+      actions: [manageAction]
     };
   })
 );

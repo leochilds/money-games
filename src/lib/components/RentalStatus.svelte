@@ -1,7 +1,22 @@
 <script lang="ts">
-  import type { RentalItem } from '$lib/types';
+  import { createEventDispatcher } from 'svelte';
+
+  import type { RentalItem, RentalItemAction } from '$lib/types';
+
+  const dispatch = createEventDispatcher<{ manage: string }>();
 
   let { items = [] as RentalItem[] } = $props();
+
+  function handleActionClick(item: RentalItem, action: RentalItemAction) {
+    if (action.type !== 'manage') {
+      return;
+    }
+    const propertyId = action.propertyId ?? item.propertyId;
+    if (!propertyId) {
+      return;
+    }
+    dispatch('manage', propertyId);
+  }
 </script>
 
 <section class="col-12 col-lg-6">
@@ -13,8 +28,26 @@
           <li class="list-group-item text-muted">Rental updates will appear here.</li>
         {:else}
           {#each items as item (item.id)}
-            <li class="list-group-item">
-              {@html item.contentHtml}
+            <li class="list-group-item py-3">
+              <div class="d-flex flex-column gap-2">
+                <div class="rental-item-content" class:with-actions={Boolean(item.actions?.length)}>
+                  {@html item.contentHtml}
+                </div>
+                {#if item.actions?.length}
+                  <div class="d-flex flex-wrap align-items-center gap-2">
+                    {#each item.actions as action, index (action.type + (action.propertyId ?? '') + index)}
+                      <button
+                        type="button"
+                        class={action.className ?? 'btn btn-primary btn-sm'}
+                        aria-label={action.ariaLabel ?? action.label}
+                        onclick={() => handleActionClick(item, action)}
+                      >
+                        {action.label}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
             </li>
           {/each}
         {/if}
@@ -22,3 +55,9 @@
     </div>
   </div>
 </section>
+
+<style>
+  .rental-item-content.with-actions {
+    margin-bottom: 0.25rem;
+  }
+</style>

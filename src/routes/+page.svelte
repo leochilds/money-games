@@ -205,7 +205,7 @@
 </div>
 
 <div class="row g-4 mt-1">
-  <RentalStatus items={$rentalItems} />
+  <RentalStatus items={$rentalItems} on:manage={handleManageEvent} />
   <ActivityHistory entries={$historyEntries} />
 </div>
 
