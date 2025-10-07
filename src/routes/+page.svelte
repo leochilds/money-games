@@ -30,6 +30,10 @@
     purchaseProperty,
     setManagementSection,
     closeManagement,
+    setPropertyLeaseMonths,
+    setPropertyRentPremium,
+    setPropertyAutoRelist,
+    setPropertyMarketingPaused,
     selectFinanceDeposit,
     selectFinanceTerm,
     selectFinanceFixedPeriod,
@@ -104,6 +108,42 @@
     setFinanceInterestOnly(event.detail);
   }
 
+  function handleLeaseChangeEvent(
+    event: CustomEvent<{ propertyId: string; leaseMonths: number }>
+  ) {
+    const { propertyId, leaseMonths } = event.detail;
+    if (propertyId && Number.isFinite(leaseMonths)) {
+      setPropertyLeaseMonths(propertyId, leaseMonths);
+    }
+  }
+
+  function handleRentChangeEvent(
+    event: CustomEvent<{ propertyId: string; rateOffset: number }>
+  ) {
+    const { propertyId, rateOffset } = event.detail;
+    if (propertyId && Number.isFinite(rateOffset)) {
+      setPropertyRentPremium(propertyId, rateOffset);
+    }
+  }
+
+  function handleAutoRelistToggleEvent(
+    event: CustomEvent<{ propertyId: string; enabled: boolean }>
+  ) {
+    const { propertyId, enabled } = event.detail;
+    if (propertyId) {
+      setPropertyAutoRelist(propertyId, enabled);
+    }
+  }
+
+  function handleMarketingToggleEvent(
+    event: CustomEvent<{ propertyId: string; paused: boolean }>
+  ) {
+    const { propertyId, paused } = event.detail;
+    if (propertyId) {
+      setPropertyMarketingPaused(propertyId, paused);
+    }
+  }
+
   function handleFinanceConfirm() {
     confirmFinance();
   }
@@ -171,7 +211,14 @@
   financingHtml={$managementView.financingHtml}
   transactionsHtml={$managementView.transactionsHtml}
   maintenanceHtml={$managementView.maintenanceHtml}
+  propertyId={$managementView.propertyId}
+  isOwned={$managementView.isOwned}
+  leasingControls={$managementView.leasingControls}
   on:sectionchange={handleManagementSectionChange}
+  on:leasechange={handleLeaseChangeEvent}
+  on:rentchange={handleRentChangeEvent}
+  on:autorelisttoggle={handleAutoRelistToggleEvent}
+  on:marketingtoggle={handleMarketingToggleEvent}
   on:hide={closeManagement}
 />
 
