@@ -37,6 +37,7 @@
     setPropertyAutoRelist,
     setPropertyMarketingPaused,
     schedulePropertyMaintenance,
+    sellProperty,
     selectFinanceDeposit,
     selectFinanceTerm,
     selectFinanceFixedPeriod,
@@ -104,6 +105,10 @@
     purchaseProperty(event.detail);
   }
 
+  function handleSellEvent(event: CustomEvent<string>) {
+    sellProperty(event.detail);
+  }
+
   function handleManagementSectionChange(event: CustomEvent<string>) {
     setManagementSection(event.detail as 'overview' | 'leasing' | 'financing' | 'transactions' | 'maintenance');
   }
@@ -164,6 +169,13 @@
     const { propertyId } = event.detail ?? {};
     if (propertyId) {
       schedulePropertyMaintenance(propertyId);
+    }
+  }
+
+  function handleManagementSellEvent(event: CustomEvent<{ propertyId: string }>) {
+    const { propertyId } = event.detail ?? {};
+    if (propertyId) {
+      sellProperty(propertyId);
     }
   }
 
@@ -238,6 +250,7 @@
       showEmptyStateMessage={marketProperties.length === 0}
       on:manage={handleManageEvent}
       on:purchase={handlePurchaseEvent}
+      on:sell={handleSellEvent}
     />
   </div>
 {:else if activeTab === 'portfolio'}
@@ -249,6 +262,7 @@
       showEmptyStateMessage={ownedProperties.length === 0}
       on:manage={handleManageEvent}
       on:purchase={handlePurchaseEvent}
+      on:sell={handleSellEvent}
     />
   </div>
   <div class="row g-4 mt-1">
@@ -278,6 +292,7 @@
   maintenanceHtml={$managementView.maintenanceHtml}
   propertyId={$managementView.propertyId}
   isOwned={$managementView.isOwned}
+  saleState={$managementView.saleState}
   leasingControls={$managementView.leasingControls}
   maintenanceState={$managementView.maintenanceState}
   on:sectionchange={handleManagementSectionChange}
@@ -286,6 +301,7 @@
   on:autorelisttoggle={handleAutoRelistToggleEvent}
   on:marketingtoggle={handleMarketingToggleEvent}
   on:maintenanceschedule={handleMaintenanceScheduleEvent}
+  on:sell={handleManagementSellEvent}
   on:hide={closeManagement}
 />
 

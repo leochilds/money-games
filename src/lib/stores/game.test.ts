@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 
-import { MARKET_CONFIG } from '$lib/config';
-import { gameState, getRentStrategies, initialiseGame, tickDay } from './game';
+import { MAINTENANCE_CONFIG, MARKET_CONFIG } from '$lib/config';
+import { formatCurrency } from '$lib/utils';
+import { gameState, getRentStrategies, initialiseGame, sellProperty, tickDay } from './game';
 
 type TestProperty = Parameters<typeof getRentStrategies>[0];
 
@@ -296,5 +297,155 @@ describe('mortgage processing', () => {
     const lastHistory = updated.history[updated.history.length - 1]?.message ?? '';
     expect(lastHistory).toContain('Forced sale of Balloon Test');
     expect(updated.balance).toBeGreaterThan(initialState.balance);
+  });
+});
+
+describe('sellProperty', () => {
+  const maintenanceThreshold = MAINTENANCE_CONFIG.criticalThreshold ?? 25;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    initialiseGame();
+  });
+
+  function seedPortfolio(property: TestProperty, balance: number) {
+    const baseState = get(gameState);
+    gameState.set({
+      ...baseState,
+      balance,
+      portfolio: [property],
+      market: [],
+      history: [],
+      management: { ...baseState.management, open: false, propertyId: null },
+      finance: { ...baseState.finance, open: false, propertyId: null }
+    });
+  }
+
+  it('prevents sale when maintenance is below the threshold and records the attempt', () => {
+    const property = createProperty({
+      id: 'low-maintenance',
+      name: 'Low Maintenance',
+      maintenancePercent: Math.max(maintenanceThreshold - 5, 0),
+      maintenanceWork: null
+    });
+
+    seedPortfolio(property, 50_000);
+
+    sellProperty('low-maintenance');
+
+    const updated = get(gameState);
+    expect(updated.portfolio).toHaveLength(1);
+    const lastMessage = updated.history.at(-1)?.message ?? '';
+    expect(lastMessage).toContain('Sale attempt blocked');
+    expect(lastMessage.toLowerCase()).toContain('maintenance');
+  });
+
+  it('prevents sale when maintenance work is active and logs the restriction', () => {
+    const property = createProperty({
+      id: 'active-maintenance',
+      name: 'Active Maintenance',
+      maintenancePercent: maintenanceThreshold + 10,
+      maintenanceWork: {
+        monthsRemaining: 1,
+        cost: 5_000,
+        scheduledOnDay: 0,
+        startDelayMonths: 0
+      }
+    });
+
+    seedPortfolio(property, 60_000);
+
+    sellProperty('active-maintenance');
+
+    const updated = get(gameState);
+    expect(updated.portfolio).toHaveLength(1);
+    const lastMessage = updated.history.at(-1)?.message ?? '';
+    expect(lastMessage).toContain('Sale attempt blocked');
+    expect(lastMessage).toContain('Maintenance work must be complete');
+  });
+
+  it('credits net proceeds when a property sale succeeds', () => {
+    const mortgage = {
+      depositRatio: 0.2,
+      deposit: 40_000,
+      principal: 160_000,
+      fixedPeriodYears: 2,
+      fixedPeriodMonths: 24,
+      interestOnly: false,
+      annualInterestRate: 0.04,
+      reversionRate: 0.05,
+      baseRate: 0.03,
+      variableRateMargin: 0.02,
+      variableRateActive: false,
+      monthlyPayment: 900,
+      monthlyInterestRate: 0.04 / 12,
+      remainingTermMonths: 300,
+      termMonths: 360,
+      remainingBalance: 50_000
+    } as const;
+
+    const property = createProperty({
+      id: 'sale-success',
+      name: 'Sale Success',
+      maintenancePercent: Math.max(maintenanceThreshold + 55, 80),
+      baseValue: 200_000,
+      cost: 200_000,
+      mortgage: { ...mortgage },
+      maintenanceWork: null
+    });
+
+    const startingBalance = 10_000;
+    seedPortfolio(property, startingBalance);
+
+    sellProperty('sale-success');
+
+    const updated = get(gameState);
+    expect(updated.portfolio).toHaveLength(0);
+    const salePrice = Math.round((property.baseValue * property.maintenancePercent) / 100);
+    const expectedNet = salePrice - mortgage.remainingBalance;
+    const expectedBalance = startingBalance + expectedNet;
+    expect(updated.balance).toBe(expectedBalance);
+    const lastMessage = updated.history.at(-1)?.message ?? '';
+    expect(lastMessage).toContain('Sold Sale Success');
+    expect(lastMessage).toContain(`netted ${formatCurrency(expectedNet)}`);
+  });
+
+  it('repays any outstanding mortgage balance during the sale', () => {
+    const mortgage = {
+      depositRatio: 0.25,
+      deposit: 30_000,
+      principal: 120_000,
+      fixedPeriodYears: 1,
+      fixedPeriodMonths: 12,
+      interestOnly: false,
+      annualInterestRate: 0.035,
+      reversionRate: 0.045,
+      baseRate: 0.03,
+      variableRateMargin: 0.015,
+      variableRateActive: false,
+      monthlyPayment: 750,
+      monthlyInterestRate: 0.035 / 12,
+      remainingTermMonths: 200,
+      termMonths: 240,
+      remainingBalance: 30_000
+    } as const;
+
+    const property = createProperty({
+      id: 'mortgage-clearance',
+      name: 'Mortgage Clearance',
+      maintenancePercent: maintenanceThreshold + 20,
+      baseValue: 150_000,
+      cost: 150_000,
+      mortgage: { ...mortgage }
+    });
+
+    seedPortfolio(property, 5_000);
+
+    sellProperty('mortgage-clearance');
+
+    const updated = get(gameState);
+    expect(updated.portfolio).toHaveLength(0);
+    const lastMessage = updated.history.at(-1)?.message ?? '';
+    expect(lastMessage).toContain('Repaid $30,000 outstanding');
   });
 });
