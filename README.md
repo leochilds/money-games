@@ -1,5 +1,8 @@
 # Money Games
 
+![Tests](https://img.shields.io/badge/tests-30%20passed-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-52.56%25-yellow)
+
 An interactive collection of financial literacy games built with [SvelteKit](https://kit.svelte.dev/). The live site is deployed to GitHub Pages at [leochilds.github.io/money-games](https://leochilds.github.io/money-games/).
 
 The previous static implementation is retained in [`legacy/`](legacy/) for reference while new experiences are implemented in SvelteKit.
@@ -46,7 +49,7 @@ Generate a full coverage report using Vitest:
 npm run test:coverage
 ```
 
-The command produces an HTML coverage report in `coverage/index.html` alongside summary information in the terminal output. The coverage workflow is validated in CI to help guard against regressions.
+The command produces an HTML coverage report in `coverage/index.html` alongside summary information in the terminal output. The coverage workflow is validated in CI to help guard against regressions. The badges above reflect the most recent local run (`npm run test` and `npm run test:coverage`) from this revision.
 
 ## Building for production
 
