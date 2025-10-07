@@ -19,6 +19,7 @@ import {
   getRandomInt,
   getRandomNumber,
   pickRandom,
+  roundCurrency,
   selectFeatureSubset
 } from '$lib/utils';
 
@@ -148,8 +149,8 @@ type GameState = {
 
 const MINIMUM_DEPOSIT_RATIO = Math.min(...FINANCE_CONFIG.depositOptions);
 
-const RENT_RATE_OFFSETS = [-0.01, 0, 0.0125];
-const LEASE_LENGTH_CHOICES = [12, 18, 24];
+const RENT_RATE_OFFSETS = [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1];
+const LEASE_LENGTH_CHOICES = [6, 12, 18, 24, 36];
 
 let historyIdCounter = 1;
 
@@ -356,7 +357,7 @@ function createInitialProperty(definition: PropertyDefinition, day = 1): GamePro
     vacancyMonths: 0
   };
 
-  const plans = getRentStrategies(placeholder);
+  const plans = getRentStrategies(placeholder, FINANCE_CONFIG.centralBank.initialRate);
   const preferredPlan =
     plans.find(
       (plan) =>
@@ -426,7 +427,7 @@ function createProceduralProperty(state: GameState): GameProperty {
     vacancyMonths: 0
   };
 
-  const plans = getRentStrategies(provisional);
+  const plans = getRentStrategies(provisional, state.centralBankRate);
   const targetPlan =
     plans.find(
       (plan) =>
@@ -553,8 +554,12 @@ function buildRentPlanId(leaseMonths: number, rateOffset: number): string {
   return `lease-${leaseMonths}-rate-${rateKey}`;
 }
 
-function findRentPlan(property: GameProperty, rentPlanId: string): RentPlan | undefined {
-  const plans = getRentStrategies(property);
+function findRentPlan(
+  property: GameProperty,
+  rentPlanId: string,
+  baseRate?: number
+): RentPlan | undefined {
+  const plans = getRentStrategies(property, baseRate);
   return plans.find((plan) => plan.id === rentPlanId);
 }
 
@@ -562,16 +567,47 @@ function formatRentPremiumLabel(rateOffset: number): string {
   return `${(rateOffset * 100).toFixed(1)}%`;
 }
 
-function getRentStrategies(property: GameProperty): RentPlan[] {
+function calculateTenantProbability(
+  property: GameProperty,
+  leaseMonths: number,
+  rateOffset: number
+): number {
+  const demandScore = clampDemandScore(property?.demandScore ?? 5);
+  const baseProbability = Math.min(0.2 + (demandScore / 10) * 0.6, 0.95);
+
+  const rentIndex = Math.max(RENT_RATE_OFFSETS.indexOf(rateOffset), 0);
+  const rentRatio = RENT_RATE_OFFSETS.length > 1 ? rentIndex / (RENT_RATE_OFFSETS.length - 1) : 0;
+  const rentFactor = Math.max(1 - rentRatio * 0.5, 0.35);
+
+  const leaseIndex = Math.max(LEASE_LENGTH_CHOICES.indexOf(leaseMonths), 0);
+  const leaseRatio = LEASE_LENGTH_CHOICES.length > 1 ? leaseIndex / (LEASE_LENGTH_CHOICES.length - 1) : 0;
+
+  let leaseFactor = 1;
+  if (rateOffset < 0.05) {
+    leaseFactor += (leaseRatio - 0.5) * 0.4;
+  } else if (rateOffset > 0.06) {
+    leaseFactor += (0.5 - leaseRatio) * 0.4;
+  }
+
+  const probability = Math.min(
+    Math.max(baseProbability * rentFactor * Math.max(leaseFactor, 0.6), 0.05),
+    0.95
+  );
+
+  return Math.round(probability * 1000) / 1000;
+}
+
+export function getRentStrategies(property: GameProperty, baseRate?: number): RentPlan[] {
+  const defaultBaseRate = FINANCE_CONFIG?.centralBank?.initialRate ?? 0;
+  const baseRateCandidate = Number.isFinite(baseRate) ? baseRate : defaultBaseRate;
+  const effectiveBaseRate = Math.max(baseRateCandidate ?? 0, 0);
+
   return LEASE_LENGTH_CHOICES.flatMap((leaseMonths) =>
     RENT_RATE_OFFSETS.map((rateOffset) => {
-      const monthlyRent = Math.round(property.monthlyRentEstimate * (1 + rateOffset * 5));
-      const demandScore = property.demandScore ?? 5;
-      const maintenanceFactor = property.maintenancePercent / 100;
-      const baseProbability = Math.min(0.15 + demandScore * 0.08, 0.95);
-      const leaseFactor = 1 - (leaseMonths - LEASE_LENGTH_CHOICES[0]) / 60;
-      const rateFactor = 1 - Math.abs(rateOffset) * 12;
-      const probability = Math.max(Math.min(baseProbability * leaseFactor * rateFactor * maintenanceFactor, 0.95), 0.05);
+      const annualRate = Math.max(effectiveBaseRate + rateOffset, 0.001);
+      const monthlyRent = roundCurrency((property.cost * annualRate) / 12);
+      const probability = calculateTenantProbability(property, leaseMonths, rateOffset);
+
       return {
         id: buildRentPlanId(leaseMonths, rateOffset),
         label: `${leaseMonths}-month · ${(rateOffset * 100).toFixed(1)}% premium`,
@@ -714,7 +750,7 @@ function processMonthlyTick(state: GameState): GameState {
     } else if (!updated.autoRelist) {
       historyMessages.push(`Auto-relisting is disabled for ${updated.name}; no tenants were sourced this month.`);
     } else {
-      const plans = getRentStrategies(updated);
+      const plans = getRentStrategies(updated, state.centralBankRate);
       const selectedPlan = plans.find((plan) => plan.id === updated.rentPlanId) ?? plans[0];
       const successChance = selectedPlan?.probability ?? 0.2;
       if (Math.random() < successChance) {
@@ -1110,7 +1146,7 @@ export const managementView = derived(gameState, ($state) => {
     </div>
   `;
 
-  const rentPlans = getRentStrategies(property);
+  const rentPlans = getRentStrategies(property, $state.centralBankRate);
   const selectedPlan =
     rentPlans.find((plan) => plan.id === property.rentPlanId) ?? rentPlans[0] ?? null;
   const marketingStatus = property.rentalMarketingPausedForMaintenance
@@ -1454,7 +1490,7 @@ export function setPropertyLeaseMonths(propertyId: string, leaseMonths: number):
   }
   gameState.update((state) => {
     const result = updatePortfolioProperty(state, propertyId, (property) => {
-      const plans = getRentStrategies(property);
+      const plans = getRentStrategies(property, state.centralBankRate);
       const currentPlan =
         plans.find((plan) => plan.id === property.rentPlanId) ?? plans[0] ?? null;
       if (!currentPlan) {
@@ -1473,7 +1509,11 @@ export function setPropertyLeaseMonths(propertyId: string, leaseMonths: number):
     if (!result.changed || !result.property) {
       return result.state;
     }
-    const plan = findRentPlan(result.property, result.property.rentPlanId);
+    const plan = findRentPlan(
+      result.property,
+      result.property.rentPlanId,
+      result.state.centralBankRate
+    );
     if (!plan) {
       return result.state;
     }
@@ -1488,7 +1528,7 @@ export function setPropertyRentPremium(propertyId: string, rateOffset: number): 
   }
   gameState.update((state) => {
     const result = updatePortfolioProperty(state, propertyId, (property) => {
-      const plans = getRentStrategies(property);
+      const plans = getRentStrategies(property, state.centralBankRate);
       const currentPlan =
         plans.find((plan) => plan.id === property.rentPlanId) ?? plans[0] ?? null;
       if (!currentPlan) {
@@ -1507,7 +1547,11 @@ export function setPropertyRentPremium(propertyId: string, rateOffset: number): 
     if (!result.changed || !result.property) {
       return result.state;
     }
-    const plan = findRentPlan(result.property, result.property.rentPlanId);
+    const plan = findRentPlan(
+      result.property,
+      result.property.rentPlanId,
+      result.state.centralBankRate
+    );
     if (!plan) {
       return result.state;
     }
