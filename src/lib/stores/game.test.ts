@@ -150,6 +150,48 @@ describe('rental marketing controls', () => {
     expect(updated.portfolio[0]?.rentalMarketingActive).toBe(false);
     expect(updated.history.at(-1)?.message).toContain('Placed a tenant');
   });
+
+  it('boosts tenant placement probability after consecutive vacancies', () => {
+    const initialState = get(gameState);
+    const baseProperty = createProperty({
+      id: 'vacancy-test',
+      name: 'Vacancy Test',
+      demandScore: 5,
+      rentalMarketingActive: true,
+      autoRelist: true,
+      vacancyMonths: 0
+    });
+
+    const plans = getRentStrategies(baseProperty, initialState.centralBankRate);
+    const slowPlan = plans.find(
+      (plan) => plan.leaseMonths === 36 && Math.abs(plan.rateOffset - 0.1) < 1e-6
+    );
+    expect(slowPlan).toBeDefined();
+
+    const property = { ...baseProperty, rentPlanId: slowPlan!.id };
+
+    gameState.set({
+      ...initialState,
+      portfolio: [property],
+      lastRentCollectionDay: initialState.day - 30
+    });
+
+    vi.spyOn(Math, 'random').mockReturnValue(0.25);
+
+    tickDay();
+
+    let updated = get(gameState);
+    expect(updated.portfolio[0]?.tenant).toBeNull();
+    expect(updated.portfolio[0]?.vacancyMonths).toBe(1);
+
+    gameState.update((state) => ({ ...state, lastRentCollectionDay: state.day - 30 }));
+
+    tickDay();
+
+    updated = get(gameState);
+    expect(updated.portfolio[0]?.tenant).not.toBeNull();
+    expect(updated.portfolio[0]?.vacancyMonths).toBe(0);
+  });
 });
 
 describe('getRentStrategies', () => {

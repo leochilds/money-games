@@ -1269,8 +1269,17 @@ function processMonthlyTick(state: GameState): GameState {
         if (updated.rentalMarketingActive) {
           const plans = getRentStrategies(updated, state.centralBankRate);
           const selectedPlan = plans.find((plan) => plan.id === updated.rentPlanId) ?? plans[0];
-          const successChance = selectedPlan?.probability ?? 0.2;
-          const vacancyMonths = (updated.vacancyMonths ?? 0) + 1;
+          const vacancyMonths = Math.max((updated.vacancyMonths ?? 0) + 1, 1);
+          const baseChance = selectedPlan?.probability ?? 0.2;
+          const vacancyBoost = Math.min(Math.max((vacancyMonths - 1) * 0.08, 0), 0.3);
+          const demandAdjustment = Math.min(
+            (clampDemandScore(updated.demandScore) - 5) * 0.02,
+            0.2
+          );
+          const successChance = Math.min(
+            Math.max(baseChance + vacancyBoost + demandAdjustment, 0.01),
+            0.98
+          );
           if (Math.random() < successChance) {
             updated = {
               ...updated,
