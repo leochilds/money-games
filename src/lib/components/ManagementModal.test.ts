@@ -35,6 +35,7 @@ const defaultProps = {
     selectedLeaseMonths: 12,
     selectedRateOffset: 0.05,
     autoRelist: false,
+    marketingActive: false,
     marketingPaused: false,
     hasTenant: false
   },
@@ -102,6 +103,7 @@ describe('ManagementModal', () => {
     const leaseChanges: Array<{ propertyId: string; leaseMonths: number }> = [];
     const rentChanges: Array<{ propertyId: string; rateOffset: number }> = [];
     const autoRelistChanges: Array<{ propertyId: string; enabled: boolean }> = [];
+    const marketingActions: Array<{ propertyId: string; active: boolean }> = [];
     const marketingChanges: Array<{ propertyId: string; paused: boolean }> = [];
 
     render(ManagementModal, {
@@ -110,6 +112,7 @@ describe('ManagementModal', () => {
         leasechange: (event) => leaseChanges.push(event.detail),
         rentchange: (event) => rentChanges.push(event.detail),
         autorelisttoggle: (event) => autoRelistChanges.push(event.detail),
+        marketingaction: (event) => marketingActions.push(event.detail),
         marketingtoggle: (event) => marketingChanges.push(event.detail)
       }
     });
@@ -117,16 +120,19 @@ describe('ManagementModal', () => {
     const leaseSlider = screen.getByLabelText('Lease length') as HTMLInputElement;
     const rentSlider = screen.getByLabelText('Rent premium') as HTMLInputElement;
     const autoRelistToggle = screen.getByLabelText('Auto-relist vacant property') as HTMLInputElement;
+    const marketingActionButton = screen.getByRole('button', { name: 'List for rent' });
     const marketingToggle = screen.getByLabelText('Pause marketing for maintenance') as HTMLInputElement;
 
     await fireEvent.change(leaseSlider, { target: { value: '1' } });
     await fireEvent.change(rentSlider, { target: { value: '0' } });
     await fireEvent.click(autoRelistToggle);
+    await fireEvent.click(marketingActionButton);
     await fireEvent.click(marketingToggle);
 
     expect(leaseChanges.at(-1)).toEqual({ propertyId: 'prop-1', leaseMonths: 12 });
     expect(rentChanges.at(-1)).toEqual({ propertyId: 'prop-1', rateOffset: 0.03 });
     expect(autoRelistChanges.at(-1)).toEqual({ propertyId: 'prop-1', enabled: true });
+    expect(marketingActions.at(-1)).toEqual({ propertyId: 'prop-1', active: true });
     expect(marketingChanges.at(-1)).toEqual({ propertyId: 'prop-1', paused: true });
   });
 
