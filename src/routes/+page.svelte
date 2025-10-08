@@ -41,6 +41,8 @@
     setPropertyMarketingPaused,
     schedulePropertyMaintenance,
     sellProperty,
+    setManagementRefinanceFixedPeriod,
+    confirmManagementRefinance,
     selectFinanceDeposit,
     selectFinanceTerm,
     selectFinanceFixedPeriod,
@@ -191,6 +193,22 @@
     }
   }
 
+  function handleRefinancePeriodChangeEvent(
+    event: CustomEvent<{ propertyId: string; years: number }>
+  ) {
+    const { propertyId, years } = event.detail ?? {};
+    if (propertyId && Number.isFinite(years)) {
+      setManagementRefinanceFixedPeriod(years);
+    }
+  }
+
+  function handleRefinanceConfirmEvent(event: CustomEvent<{ propertyId: string }>) {
+    const { propertyId } = event.detail ?? {};
+    if (propertyId) {
+      confirmManagementRefinance(propertyId);
+    }
+  }
+
   function handleFinanceConfirm() {
     confirmFinance();
   }
@@ -329,6 +347,8 @@
   on:marketingtoggle={handleMarketingToggleEvent}
   on:maintenanceschedule={handleMaintenanceScheduleEvent}
   on:sell={handleManagementSellEvent}
+  on:refinanceperiodchange={handleRefinancePeriodChangeEvent}
+  on:refinanceconfirm={handleRefinanceConfirmEvent}
   on:show={handleModalShow}
   on:hide={handleManagementHide}
 />

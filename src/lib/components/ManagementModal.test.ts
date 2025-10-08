@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ManagementModal from './ManagementModal.svelte';
@@ -64,6 +64,31 @@ const defaultProps = {
     maintenanceThreshold: 25,
     canSell: true,
     restrictions: []
+  },
+  refinance: {
+    available: true,
+    reason: null,
+    options: [
+      { years: 2, label: '2 years', disabled: false, active: false },
+      { years: 5, label: '5 years', disabled: false, active: true }
+    ],
+    preview: {
+      fixedPeriodYears: 5,
+      fixedPeriodMonths: 60,
+      fixedRate: 0.04,
+      reversionRate: 0.05,
+      baseRate: 0.04,
+      variableRateMargin: 0.01,
+      monthlyPayment: 1_450,
+      paymentDelta: -150
+    },
+    equity: 120_000,
+    equityRatio: 0.4,
+    propertyValue: 300_000,
+    outstandingBalance: 180_000,
+    centralBankRate: 0.0375,
+    remainingTermYears: 20,
+    selectedFixedPeriodYears: 5
   }
 };
 
@@ -105,6 +130,8 @@ describe('ManagementModal', () => {
     const autoRelistChanges: Array<{ propertyId: string; enabled: boolean }> = [];
     const marketingActions: Array<{ propertyId: string; active: boolean }> = [];
     const marketingChanges: Array<{ propertyId: string; paused: boolean }> = [];
+    const refinancePeriodChanges: Array<{ propertyId: string; years: number }> = [];
+    const refinanceConfirmations: Array<{ propertyId: string }> = [];
 
     render(ManagementModal, {
       props: defaultProps,
@@ -113,7 +140,9 @@ describe('ManagementModal', () => {
         rentchange: (event) => rentChanges.push(event.detail),
         autorelisttoggle: (event) => autoRelistChanges.push(event.detail),
         marketingaction: (event) => marketingActions.push(event.detail),
-        marketingtoggle: (event) => marketingChanges.push(event.detail)
+        marketingtoggle: (event) => marketingChanges.push(event.detail),
+        refinanceperiodchange: (event) => refinancePeriodChanges.push(event.detail),
+        refinanceconfirm: (event) => refinanceConfirmations.push(event.detail)
       }
     });
 
@@ -122,18 +151,28 @@ describe('ManagementModal', () => {
     const autoRelistToggle = screen.getByLabelText('Auto-relist vacant property') as HTMLInputElement;
     const marketingActionButton = screen.getByRole('button', { name: 'List for rent' });
     const marketingToggle = screen.getByLabelText('Pause marketing for maintenance') as HTMLInputElement;
+    const refinanceCardHeading = screen.getByRole('heading', { name: 'Re-lock fixed rate' });
+    const refinanceCard = refinanceCardHeading.closest('.section-card') as HTMLElement;
+    const refinanceOptionButton = within(refinanceCard).getByRole('button', { name: '2 years' });
+    const refinanceConfirmButton = within(refinanceCard).getByRole('button', {
+      name: 'Lock new fixed rate'
+    });
 
     await fireEvent.change(leaseSlider, { target: { value: '1' } });
     await fireEvent.change(rentSlider, { target: { value: '0' } });
     await fireEvent.click(autoRelistToggle);
     await fireEvent.click(marketingActionButton);
     await fireEvent.click(marketingToggle);
+    await fireEvent.click(refinanceOptionButton);
+    await fireEvent.click(refinanceConfirmButton);
 
     expect(leaseChanges.at(-1)).toEqual({ propertyId: 'prop-1', leaseMonths: 12 });
     expect(rentChanges.at(-1)).toEqual({ propertyId: 'prop-1', rateOffset: 0.03 });
     expect(autoRelistChanges.at(-1)).toEqual({ propertyId: 'prop-1', enabled: true });
     expect(marketingActions.at(-1)).toEqual({ propertyId: 'prop-1', active: true });
     expect(marketingChanges.at(-1)).toEqual({ propertyId: 'prop-1', paused: true });
+    expect(refinancePeriodChanges.at(-1)).toEqual({ propertyId: 'prop-1', years: 2 });
+    expect(refinanceConfirmations.at(-1)).toEqual({ propertyId: 'prop-1' });
   });
 
   it('only allows scheduling maintenance when permitted', async () => {

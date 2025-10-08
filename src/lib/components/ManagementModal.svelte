@@ -3,11 +3,18 @@
 
   import {
     createEmptyMaintenanceState,
+    createEmptyRefinanceView,
     type ManagementLeasingControls,
     type ManagementMaintenanceState,
+    type ManagementRefinanceView,
     type ManagementSaleState
   } from '$lib/stores/game';
-  import { formatCurrency, formatLeaseCountdown, formatPercentage } from '$lib/utils';
+  import {
+    formatCurrency,
+    formatInterestRate,
+    formatLeaseCountdown,
+    formatPercentage
+  } from '$lib/utils';
 
   type BootstrapModal = {
     show: () => void;
@@ -26,6 +33,8 @@
     marketingtoggle: { propertyId: string; paused: boolean };
     maintenanceschedule: { propertyId: string };
     sell: { propertyId: string };
+    refinanceperiodchange: { propertyId: string; years: number };
+    refinanceconfirm: { propertyId: string };
   }>();
 
   const emptyLeasingControls: ManagementLeasingControls = {
@@ -41,6 +50,7 @@
     hasTenant: false
   };
   const emptyMaintenanceState: ManagementMaintenanceState = createEmptyMaintenanceState();
+  const emptyRefinanceState: ManagementRefinanceView = createEmptyRefinanceView();
 
   let {
     open = false,
@@ -56,7 +66,8 @@
     isOwned = false,
     leasingControls = emptyLeasingControls,
     maintenanceState = emptyMaintenanceState,
-    saleState = null as ManagementSaleState | null
+    saleState = null as ManagementSaleState | null,
+    refinance = emptyRefinanceState
   } = $props();
 
   let modalElement: HTMLDivElement | null = null;
@@ -217,6 +228,31 @@
     }
     return `Estimated cost ${formatCurrency(maintenanceState.projectedCost)} (paid upfront).`;
   });
+  const refinancePreview = $derived.by(() => refinance.preview ?? null);
+  const refinanceDeltaClass = $derived.by(() => {
+    const delta = refinancePreview?.paymentDelta ?? 0;
+    if (delta < 0) {
+      return 'text-success';
+    }
+    if (delta > 0) {
+      return 'text-danger';
+    }
+    return 'text-muted';
+  });
+  const refinanceDeltaLabel = $derived.by(() => {
+    const delta = refinancePreview?.paymentDelta ?? 0;
+    if (Math.abs(delta) < 0.005) {
+      return 'no change';
+    }
+    const formatted = formatCurrency(Math.abs(delta));
+    return `${delta > 0 ? '+' : '-'}${formatted}`;
+  });
+  const refinanceFixedPeriodLabel = $derived.by(() => {
+    const years = refinancePreview?.fixedPeriodYears ?? refinance.selectedFixedPeriodYears ?? 0;
+    const rounded = Number(years.toFixed(2));
+    const suffix = Math.abs(rounded - 1) < 1e-6 ? '' : 's';
+    return `${rounded} year${suffix}`;
+  });
   const maintenanceScheduleDisabled = $derived.by(
     () => !isOwned || !maintenanceState.canSchedule
   );
@@ -227,6 +263,20 @@
 
   function formatPremium(value: number): string {
     return `${(value * 100).toFixed(1)}%`;
+  }
+
+  function handleRefinanceSelection(years: number) {
+    if (!propertyId) {
+      return;
+    }
+    dispatch('refinanceperiodchange', { propertyId, years });
+  }
+
+  function handleRefinanceConfirmClick() {
+    if (!propertyId) {
+      return;
+    }
+    dispatch('refinanceconfirm', { propertyId });
   }
 
   function handleLeaseSliderChange(event: Event) {
@@ -544,6 +594,65 @@
             >
               <div id="managementFinancing">
                 {@html financingHtml}
+                {#if refinance.available}
+                  <div class="section-card mt-3">
+                    <h6>Re-lock fixed rate</h6>
+                    <p class="mb-1">
+                      <strong>Equity:</strong>
+                      {formatCurrency(refinance.equity)}
+                      ({formatPercentage(refinance.equityRatio)} of {formatCurrency(refinance.propertyValue)})
+                    </p>
+                    <p class="mb-1 text-muted">
+                      <strong>Central bank base rate:</strong> {formatInterestRate(refinance.centralBankRate)}
+                    </p>
+                    <div class="management-finance-options mt-2">
+                      {#each refinance.options as option (option.label)}
+                        <button
+                          type="button"
+                          class={`btn btn-outline-secondary${option.active ? ' active' : ''}`}
+                          disabled={option.disabled}
+                          aria-pressed={option.active ? 'true' : 'false'}
+                          onclick={() => handleRefinanceSelection(option.years)}
+                        >
+                          {option.label}
+                        </button>
+                      {/each}
+                    </div>
+                    {#if refinancePreview}
+                      <p class="mb-1">
+                        <strong>New fixed rate:</strong>
+                        {formatInterestRate(refinancePreview.fixedRate)} for {refinanceFixedPeriodLabel}
+                      </p>
+                      <p class="mb-1 text-muted">
+                        <strong>Reversion:</strong>
+                        {formatInterestRate(refinancePreview.reversionRate)}
+                        (base {formatInterestRate(refinancePreview.baseRate)} +
+                        {formatInterestRate(refinancePreview.variableRateMargin)})
+                      </p>
+                      <p class="mb-1">
+                        <strong>Payment with new fix:</strong>
+                        {formatCurrency(refinancePreview.monthlyPayment)} / month
+                      </p>
+                      <p class={`mb-2 ${refinanceDeltaClass}`}>
+                        <strong>Change vs current payment:</strong> {refinanceDeltaLabel}
+                      </p>
+                    {/if}
+                    <div class="management-actions">
+                      <button
+                        type="button"
+                        class="btn btn-primary"
+                        onclick={handleRefinanceConfirmClick}
+                        disabled={!refinancePreview}
+                      >
+                        Lock new fixed rate
+                      </button>
+                    </div>
+                  </div>
+                {:else if refinance.reason}
+                  <div class="alert alert-light border mt-3 small mb-0" role="status">
+                    {refinance.reason}
+                  </div>
+                {/if}
               </div>
             </div>
             <div
