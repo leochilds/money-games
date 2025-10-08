@@ -11,6 +11,7 @@ import {
   pauseGame,
   resumeGame,
   sellProperty,
+  setPropertyRentalMarketingActive,
   tickDay
 } from './game';
 
@@ -40,6 +41,7 @@ function createProperty(overrides: Partial<TestProperty> = {}): TestProperty {
     tenant: null,
     mortgage: null,
     autoRelist: true,
+    rentalMarketingActive: false,
     rentalMarketingPausedForMaintenance: false,
     maintenanceWork: null,
     marketAge: 0,
@@ -98,6 +100,53 @@ describe('market listing lifecycle', () => {
 
     const updated = get(gameState);
     expect(updated.market).toHaveLength(0);
+  });
+});
+
+describe('rental marketing controls', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    initialiseGame();
+  });
+
+  it('requires marketing to be active before placing tenants when auto-relist is disabled', () => {
+    const initialState = get(gameState);
+    const property = createProperty({
+      id: 'marketing-test',
+      name: 'Marketing Test',
+      autoRelist: false,
+      rentalMarketingActive: false
+    });
+
+    gameState.set({
+      ...initialState,
+      portfolio: [property],
+      lastRentCollectionDay: initialState.day - 30
+    });
+
+    vi.spyOn(Math, 'random').mockReturnValue(0.01);
+
+    tickDay();
+
+    let updated = get(gameState);
+    expect(updated.portfolio[0]?.tenant).toBeNull();
+    expect(updated.portfolio[0]?.rentalMarketingActive).toBe(false);
+    expect(updated.history.at(-1)?.message).toContain('Marketing paused');
+
+    setPropertyRentalMarketingActive('marketing-test', true);
+
+    updated = get(gameState);
+    expect(updated.portfolio[0]?.rentalMarketingActive).toBe(true);
+    expect(updated.history.at(-1)?.message).toContain('Started advertising');
+
+    gameState.update((state) => ({ ...state, lastRentCollectionDay: state.day - 30 }));
+
+    tickDay();
+
+    updated = get(gameState);
+    expect(updated.portfolio[0]?.tenant).not.toBeNull();
+    expect(updated.portfolio[0]?.rentalMarketingActive).toBe(false);
+    expect(updated.history.at(-1)?.message).toContain('Placed a tenant');
   });
 });
 

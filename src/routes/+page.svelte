@@ -37,6 +37,7 @@
     setPropertyLeaseMonths,
     setPropertyRentPremium,
     setPropertyAutoRelist,
+    setPropertyRentalMarketingActive,
     setPropertyMarketingPaused,
     schedulePropertyMaintenance,
     sellProperty,
@@ -155,6 +156,15 @@
     const { propertyId, enabled } = event.detail;
     if (propertyId) {
       setPropertyAutoRelist(propertyId, enabled);
+    }
+  }
+
+  function handleMarketingActionEvent(
+    event: CustomEvent<{ propertyId: string; active: boolean }>
+  ) {
+    const { propertyId, active } = event.detail;
+    if (propertyId) {
+      setPropertyRentalMarketingActive(propertyId, active);
     }
   }
 
@@ -315,6 +325,7 @@
   on:leasechange={handleLeaseChangeEvent}
   on:rentchange={handleRentChangeEvent}
   on:autorelisttoggle={handleAutoRelistToggleEvent}
+  on:marketingaction={handleMarketingActionEvent}
   on:marketingtoggle={handleMarketingToggleEvent}
   on:maintenanceschedule={handleMaintenanceScheduleEvent}
   on:sell={handleManagementSellEvent}

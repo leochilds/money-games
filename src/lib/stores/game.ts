@@ -88,6 +88,7 @@ type GameProperty = PropertyDefinition & {
   tenant: Tenant | null;
   mortgage: Mortgage | null;
   autoRelist: boolean;
+  rentalMarketingActive: boolean;
   rentalMarketingPausedForMaintenance: boolean;
   maintenanceWork: MaintenanceWorkOrder | null;
   marketAge: number;
@@ -110,6 +111,7 @@ export type ManagementLeasingControls = {
   selectedLeaseMonths: number;
   selectedRateOffset: number;
   autoRelist: boolean;
+  marketingActive: boolean;
   marketingPaused: boolean;
   hasTenant: boolean;
 };
@@ -197,6 +199,7 @@ function createEmptyLeasingControls(): ManagementLeasingControls {
     selectedLeaseMonths: 0,
     selectedRateOffset: 0,
     autoRelist: false,
+    marketingActive: false,
     marketingPaused: false,
     hasTenant: false
   };
@@ -439,6 +442,7 @@ function createInitialProperty(definition: PropertyDefinition, day = 1): GamePro
     tenant: null,
     mortgage: null,
     autoRelist: true,
+    rentalMarketingActive: false,
     rentalMarketingPausedForMaintenance: false,
     maintenanceWork: null,
     marketAge: 0,
@@ -509,6 +513,7 @@ function createProceduralProperty(state: GameState): GameProperty {
     tenant: null,
     mortgage: null,
     autoRelist: true,
+    rentalMarketingActive: false,
     rentalMarketingPausedForMaintenance: false,
     maintenanceWork: null,
     marketAge: 0,
@@ -1118,34 +1123,77 @@ function processMonthlyTick(state: GameState): GameState {
       const remaining = Math.max(updated.tenant.leaseMonthsRemaining - 1, 0);
       if (remaining === 0) {
         historyMessages.push(`Lease completed at ${updated.name}. Property is now vacant.`);
-        updated = { ...updated, tenant: null };
+        const marketingShouldResume =
+          updated.autoRelist && !updated.rentalMarketingPausedForMaintenance;
+        if (marketingShouldResume) {
+          historyMessages.push(`Auto-relisting resumed marketing at ${updated.name}.`);
+        }
+        updated = {
+          ...updated,
+          tenant: null,
+          rentalMarketingActive: marketingShouldResume,
+          vacancyMonths: 0
+        };
       } else {
         updated = {
           ...updated,
           tenant: { ...updated.tenant, leaseMonthsRemaining: remaining }
         };
       }
-    } else if (updated.rentalMarketingPausedForMaintenance) {
-      historyMessages.push(`Marketing remains paused at ${updated.name} while maintenance is underway.`);
-    } else if (!updated.autoRelist) {
-      historyMessages.push(`Auto-relisting is disabled for ${updated.name}; no tenants were sourced this month.`);
     } else {
-      const plans = getRentStrategies(updated, state.centralBankRate);
-      const selectedPlan = plans.find((plan) => plan.id === updated.rentPlanId) ?? plans[0];
-      const successChance = selectedPlan?.probability ?? 0.2;
-      if (Math.random() < successChance) {
-        updated = {
-          ...updated,
-          tenant: {
-            leaseMonthsRemaining: selectedPlan.leaseMonths,
-            monthlyRent: selectedPlan.monthlyRent
-          }
-        };
+      if (updated.rentalMarketingPausedForMaintenance) {
+        if (updated.rentalMarketingActive || updated.vacancyMonths !== 0) {
+          updated = { ...updated, rentalMarketingActive: false, vacancyMonths: 0 };
+        }
         historyMessages.push(
-          `Placed a tenant at ${updated.name} on a ${selectedPlan.leaseMonths}-month lease.`
+          `Marketing remains paused at ${updated.name} while maintenance is underway.`
         );
       } else {
-        historyMessages.push(`No tenant secured for ${updated.name} this month.`);
+        let marketingJustActivated = false;
+        if (!updated.rentalMarketingActive) {
+          if (updated.autoRelist) {
+            updated = { ...updated, rentalMarketingActive: true, vacancyMonths: 0 };
+            marketingJustActivated = true;
+            historyMessages.push(`Auto-relisting resumed marketing at ${updated.name}.`);
+          } else {
+            if (updated.vacancyMonths !== 0) {
+              updated = { ...updated, vacancyMonths: 0 };
+            }
+            historyMessages.push(
+              `Marketing paused at ${updated.name}; no tenants were sourced this month.`
+            );
+          }
+        }
+
+        if (updated.rentalMarketingActive) {
+          const plans = getRentStrategies(updated, state.centralBankRate);
+          const selectedPlan = plans.find((plan) => plan.id === updated.rentPlanId) ?? plans[0];
+          const successChance = selectedPlan?.probability ?? 0.2;
+          const vacancyMonths = (updated.vacancyMonths ?? 0) + 1;
+          if (Math.random() < successChance) {
+            updated = {
+              ...updated,
+              tenant: {
+                leaseMonthsRemaining: selectedPlan.leaseMonths,
+                monthlyRent: selectedPlan.monthlyRent
+              },
+              rentalMarketingActive: false,
+              vacancyMonths: 0
+            };
+            historyMessages.push(
+              `Placed a tenant at ${updated.name} on a ${selectedPlan.leaseMonths}-month lease.`
+            );
+          } else {
+            updated = { ...updated, vacancyMonths };
+            if (!marketingJustActivated) {
+              historyMessages.push(`No tenant secured for ${updated.name} this month.`);
+            } else {
+              historyMessages.push(
+                `No tenant secured for ${updated.name} this month despite renewed marketing.`
+              );
+            }
+          }
+        }
       }
     }
 
@@ -1159,7 +1207,9 @@ function processMonthlyTick(state: GameState): GameState {
           updated = {
             ...updated,
             tenant: null,
-            rentalMarketingPausedForMaintenance: true
+            rentalMarketingPausedForMaintenance: true,
+            rentalMarketingActive: false,
+            vacancyMonths: 0
           };
           historyMessages.push(
             `Maintenance work began on ${updated.name}. Property unavailable for tenants until work completes.`
@@ -1185,8 +1235,13 @@ function processMonthlyTick(state: GameState): GameState {
             cost: newCost,
             monthlyRentEstimate: newRentEstimate,
             rentalMarketingPausedForMaintenance: false,
+            rentalMarketingActive: updated.autoRelist,
+            vacancyMonths: 0,
             maintenanceWork: null
           };
+          if (updated.autoRelist) {
+            historyMessages.push(`Auto-relisting resumed marketing at ${updated.name} after maintenance.`);
+          }
           work = null;
         }
       }
@@ -1398,7 +1453,7 @@ function buildStatusChips(property: GameProperty): { label: string; variant?: st
   }
   if (property.rentalMarketingPausedForMaintenance) {
     chips.push({ label: 'Marketing paused', variant: 'bg-warning text-dark' });
-  } else if (!property.tenant) {
+  } else if (!property.tenant && property.rentalMarketingActive) {
     chips.push({ label: 'Advertising', variant: 'bg-warning text-dark' });
   }
   if (property.autoRelist) {
@@ -1483,9 +1538,11 @@ export const rentalItems = derived(gameState, ($state): RentalItem[] =>
     }
     const marketingMessage = property.rentalMarketingPausedForMaintenance
       ? 'Vacant — marketing paused for maintenance.'
-      : property.autoRelist
-        ? 'Vacant — marketing ongoing.'
-        : 'Vacant — auto-relist disabled.';
+      : property.rentalMarketingActive
+        ? 'Vacant — marketing active.'
+        : property.autoRelist
+          ? 'Vacant — auto-relist enabled, awaiting marketing window.'
+          : 'Vacant — marketing paused.';
     return {
       id: `rental-${property.id}`,
       propertyId: property.id,
@@ -1581,9 +1638,11 @@ export const managementView = derived(gameState, ($state) => {
     rentPlans.find((plan) => plan.id === property.rentPlanId) ?? rentPlans[0] ?? null;
   const marketingStatus = property.rentalMarketingPausedForMaintenance
     ? 'Marketing paused for maintenance'
-    : property.autoRelist
-      ? 'Auto-relist enabled'
-      : 'Auto-relist disabled';
+    : property.rentalMarketingActive
+      ? 'Marketing active'
+      : property.autoRelist
+        ? 'Auto-relist enabled'
+        : 'Marketing paused';
   const leasingHtml = `
     <div class="section-card">
       <h6>Leasing status</h6>
@@ -1592,9 +1651,11 @@ export const managementView = derived(gameState, ($state) => {
           ? 'Tenant secured and paying rent.'
           : property.rentalMarketingPausedForMaintenance
             ? 'Vacant — marketing is currently paused.'
-            : property.autoRelist
+            : property.rentalMarketingActive
               ? 'Vacant — marketing active.'
-              : 'Vacant — awaiting marketing instructions.'
+              : property.autoRelist
+                ? 'Vacant — auto-relist enabled and awaiting the next marketing cycle.'
+                : 'Vacant — marketing paused.'
       }</p>
       <dl class="row small text-muted mb-0">
         <dt class="col-sm-4">Plan</dt>
@@ -1713,6 +1774,7 @@ export const managementView = derived(gameState, ($state) => {
       selectedLeaseMonths,
       selectedRateOffset,
       autoRelist: property.autoRelist,
+      marketingActive: property.rentalMarketingActive,
       marketingPaused: property.rentalMarketingPausedForMaintenance,
       hasTenant: Boolean(property.tenant)
     },
@@ -2041,13 +2103,43 @@ export function setPropertyAutoRelist(propertyId: string, enabled: boolean): voi
   });
 }
 
+export function setPropertyRentalMarketingActive(propertyId: string, active: boolean): void {
+  gameState.update((state) => {
+    const result = updatePortfolioProperty(state, propertyId, (property) => {
+      if (property.rentalMarketingActive === active) {
+        return null;
+      }
+      if (active && (property.rentalMarketingPausedForMaintenance || property.tenant)) {
+        return null;
+      }
+      return {
+        ...property,
+        rentalMarketingActive: active,
+        vacancyMonths: 0
+      };
+    });
+    if (!result.changed || !result.property) {
+      return result.state;
+    }
+    const message = result.property.rentalMarketingActive
+      ? `Started advertising ${result.property.name} for tenants.`
+      : `Paused advertising for ${result.property.name}.`;
+    return addHistory(result.state, message);
+  });
+}
+
 export function setPropertyMarketingPaused(propertyId: string, paused: boolean): void {
   gameState.update((state) => {
     const result = updatePortfolioProperty(state, propertyId, (property) => {
       if (property.rentalMarketingPausedForMaintenance === paused) {
         return null;
       }
-      return { ...property, rentalMarketingPausedForMaintenance: paused };
+      return {
+        ...property,
+        rentalMarketingPausedForMaintenance: paused,
+        rentalMarketingActive: paused ? false : property.rentalMarketingActive,
+        vacancyMonths: 0
+      };
     });
     if (!result.changed || !result.property) {
       return result.state;
@@ -2096,7 +2188,10 @@ export function schedulePropertyMaintenance(propertyId: string): void {
       ...property,
       maintenanceWork,
       rentalMarketingPausedForMaintenance:
-        tenantMonthsRemaining === 0 ? true : property.rentalMarketingPausedForMaintenance
+        tenantMonthsRemaining === 0 ? true : property.rentalMarketingPausedForMaintenance,
+      rentalMarketingActive:
+        tenantMonthsRemaining === 0 ? false : property.rentalMarketingActive,
+      vacancyMonths: tenantMonthsRemaining === 0 ? 0 : property.vacancyMonths
     };
 
     const portfolio = [...state.portfolio];

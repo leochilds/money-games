@@ -22,6 +22,7 @@
     leasechange: { propertyId: string; leaseMonths: number };
     rentchange: { propertyId: string; rateOffset: number };
     autorelisttoggle: { propertyId: string; enabled: boolean };
+    marketingaction: { propertyId: string; active: boolean };
     marketingtoggle: { propertyId: string; paused: boolean };
     maintenanceschedule: { propertyId: string };
     sell: { propertyId: string };
@@ -35,6 +36,7 @@
     selectedLeaseMonths: 0,
     selectedRateOffset: 0,
     autoRelist: false,
+    marketingActive: false,
     marketingPaused: false,
     hasTenant: false
   };
@@ -159,6 +161,18 @@
   const selectedPlan = $derived.by(() =>
     leasingControls.plans.find((plan) => plan.id === leasingControls.selectedPlanId) ?? null
   );
+  const showMarketingAction = $derived.by(
+    () => isOwned && !leasingControls.hasTenant
+  );
+  const marketingActionLabel = $derived.by(() =>
+    leasingControls.marketingActive ? 'Pause advertising' : 'List for rent'
+  );
+  const marketingActionDisabled = $derived.by(() => leasingControls.marketingPaused);
+  const marketingActionHelp = $derived.by(() =>
+    leasingControls.marketingPaused
+      ? 'Marketing is temporarily paused while maintenance is scheduled or underway.'
+      : ''
+  );
 
   function formatPercentValue(value: number): string {
     return formatPercentage((value ?? 0) / 100);
@@ -262,6 +276,14 @@
       return;
     }
     dispatch('autorelisttoggle', { propertyId, enabled: input.checked });
+  }
+
+  function handleMarketingAction() {
+    if (!propertyId || leasingControls.hasTenant) {
+      return;
+    }
+    const nextActive = !leasingControls.marketingActive;
+    dispatch('marketingaction', { propertyId, active: nextActive });
   }
 
   function handleMarketingToggle(event: Event) {
@@ -402,6 +424,21 @@
                 {@html leasingHtml}
                 {#if isOwned}
                   <div class="leasing-controls mt-3 d-flex flex-column gap-3">
+                    {#if showMarketingAction}
+                      <div class="d-flex flex-column gap-1">
+                        <button
+                          type="button"
+                          class="btn btn-outline-primary"
+                          onclick={handleMarketingAction}
+                          disabled={marketingActionDisabled}
+                        >
+                          {marketingActionLabel}
+                        </button>
+                        {#if marketingActionDisabled && marketingActionHelp}
+                          <div class="small text-muted">{marketingActionHelp}</div>
+                        {/if}
+                      </div>
+                    {/if}
                     {#if hasLeaseOptions}
                       <div>
                         <label for="leaseLengthRange" class="form-label fw-semibold">Lease length</label>
