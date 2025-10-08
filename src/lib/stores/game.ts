@@ -136,6 +136,7 @@ type ManagementState = {
   open: boolean;
   propertyId: string | null;
   activeSection: 'overview' | 'leasing' | 'financing' | 'transactions' | 'maintenance';
+  refinance: ManagementRefinanceState;
 };
 
 export type ManagementMaintenanceState = {
@@ -162,6 +163,42 @@ export type ManagementSaleState = {
   netProceeds: number;
   canSell: boolean;
   restrictions: string[];
+};
+
+type ManagementRefinanceState = {
+  fixedPeriodYears: number;
+};
+
+export type ManagementRefinanceOption = {
+  years: number;
+  label: string;
+  disabled: boolean;
+  active: boolean;
+};
+
+export type ManagementRefinancePreview = {
+  fixedPeriodYears: number;
+  fixedPeriodMonths: number;
+  fixedRate: number;
+  reversionRate: number;
+  baseRate: number;
+  variableRateMargin: number;
+  monthlyPayment: number;
+  paymentDelta: number;
+};
+
+export type ManagementRefinanceView = {
+  available: boolean;
+  reason: string | null;
+  options: ManagementRefinanceOption[];
+  preview: ManagementRefinancePreview | null;
+  equity: number;
+  equityRatio: number;
+  propertyValue: number;
+  outstandingBalance: number;
+  centralBankRate: number;
+  remainingTermYears: number;
+  selectedFixedPeriodYears: number;
 };
 
 type GameState = {
@@ -222,6 +259,22 @@ export function createEmptyMaintenanceState(): ManagementMaintenanceState {
       alreadyScheduled: false,
       insufficientFunds: false
     }
+  };
+}
+
+export function createEmptyRefinanceView(): ManagementRefinanceView {
+  return {
+    available: false,
+    reason: null,
+    options: [],
+    preview: null,
+    equity: 0,
+    equityRatio: 0,
+    propertyValue: 0,
+    outstandingBalance: 0,
+    centralBankRate: 0,
+    remainingTermYears: 0,
+    selectedFixedPeriodYears: FINANCE_CONFIG.defaultFixedPeriodYears
   };
 }
 
@@ -722,16 +775,36 @@ function deriveMortgageRateProfile({
   centralBankRate: number;
   depositRatio: number;
   fixedPeriodYears: number;
-}): { fixedRate: number; reversionRate: number } {
+}): {
+  fixedRate: number;
+  reversionRate: number;
+  baseRate: number;
+  variableRateMargin: number;
+  fixedPeriodYears: number;
+} {
   const marginBase = FINANCE_CONFIG.rateModel.variableMarginBase;
   const depositFactor = FINANCE_CONFIG.rateModel.variableMarginDepositFactor;
   const minimumMargin = FINANCE_CONFIG.rateModel.minimumMargin;
-  const depositAdjustment = depositRatio * depositFactor;
+  const resolvedDepositRatio = Number.isFinite(depositRatio)
+    ? Math.min(Math.max(depositRatio, MINIMUM_DEPOSIT_RATIO), 0.95)
+    : FINANCE_CONFIG.defaultDepositRatio;
+  const resolvedFixedPeriodYears = Number.isFinite(fixedPeriodYears) && fixedPeriodYears > 0
+    ? Math.max(fixedPeriodYears, 1 / 12)
+    : FINANCE_CONFIG.defaultFixedPeriodYears;
+  const baseRate = clampRate(centralBankRate);
+  const depositAdjustment = resolvedDepositRatio * depositFactor;
   const margin = Math.max(minimumMargin, marginBase - depositAdjustment);
-  const reversionRate = clampRate(centralBankRate + margin);
-  const incentive = FINANCE_CONFIG.rateModel.fixedRateIncentives[fixedPeriodYears] ?? 0;
+  const variableRateMargin = Math.max(margin, minimumMargin);
+  const reversionRate = clampRate(baseRate + variableRateMargin);
+  const incentive = FINANCE_CONFIG.rateModel.fixedRateIncentives[Math.round(resolvedFixedPeriodYears)] ?? 0;
   const fixedRate = clampRate(reversionRate + incentive);
-  return { fixedRate, reversionRate };
+  return {
+    fixedRate,
+    reversionRate,
+    baseRate,
+    variableRateMargin,
+    fixedPeriodYears: resolvedFixedPeriodYears
+  };
 }
 
 function clampRate(rate: number): number {
@@ -766,15 +839,18 @@ function calculateMonthlyPayment({
 function createMortgage(property: GameProperty, state: GameState): Mortgage {
   const deposit = Math.round(property.cost * state.finance.depositRatio);
   const principal = Math.max(property.cost - deposit, 0);
-  const { fixedRate, reversionRate } = deriveMortgageRateProfile({
+  const profile = deriveMortgageRateProfile({
     centralBankRate: state.centralBankRate,
     depositRatio: state.finance.depositRatio,
     fixedPeriodYears: state.finance.fixedPeriodYears
   });
   const termMonths = state.finance.termYears * 12;
-  const fixedPeriodMonths = Math.max(Math.round(state.finance.fixedPeriodYears * 12), 0);
+  const resolvedFixedPeriodYears = Math.min(profile.fixedPeriodYears, state.finance.termYears);
+  const fixedPeriodMonths = Math.max(Math.round(resolvedFixedPeriodYears * 12), 0);
+  const fixedRate = profile.fixedRate;
+  const reversionRate = profile.reversionRate;
   const monthlyInterestRate = fixedRate / 12;
-  const variableRateMargin = Math.max(reversionRate - state.centralBankRate, 0);
+  const variableRateMargin = Math.max(profile.variableRateMargin, 0);
   const monthlyPayment = calculateMonthlyPayment({
     principal,
     annualRate: fixedRate,
@@ -785,12 +861,12 @@ function createMortgage(property: GameProperty, state: GameState): Mortgage {
     depositRatio: state.finance.depositRatio,
     deposit,
     principal,
-    fixedPeriodYears: state.finance.fixedPeriodYears,
+    fixedPeriodYears: resolvedFixedPeriodYears,
     fixedPeriodMonths,
     interestOnly: state.finance.interestOnly,
     annualInterestRate: fixedRate,
     reversionRate,
-    baseRate: state.centralBankRate,
+    baseRate: profile.baseRate,
     variableRateMargin,
     variableRateActive: false,
     monthlyPayment,
@@ -872,6 +948,31 @@ function calculateSalePrice(property: GameProperty): number {
   const baseValue = Number.isFinite(property.baseValue) ? property.baseValue : property.cost;
   const maintenancePercent = clampMaintenancePercent(property.maintenancePercent);
   return calculateMaintenanceAdjustedValue(baseValue, maintenancePercent);
+}
+
+type PropertyEquitySnapshot = {
+  value: number;
+  outstanding: number;
+  equity: number;
+  ratio: number;
+};
+
+function calculatePropertyEquity(property: GameProperty | null | undefined): PropertyEquitySnapshot {
+  if (!property) {
+    return { value: 0, outstanding: 0, equity: 0, ratio: 0 };
+  }
+
+  const value = Math.max(Number.isFinite(property.cost) ? property.cost : 0, 0);
+  const outstanding = Math.max(
+    Number.isFinite(property.mortgage?.remainingBalance)
+      ? property.mortgage?.remainingBalance ?? 0
+      : 0,
+    0
+  );
+  const equity = Math.max(value - outstanding, 0);
+  const ratio = value > 0 ? Math.min(Math.max(equity / value, 0), 0.95) : 0;
+
+  return { value, outstanding, equity, ratio };
 }
 
 type MortgageProcessingOutcome = {
@@ -1387,7 +1488,10 @@ function createInitialState(): GameState {
     management: {
       open: false,
       propertyId: null,
-      activeSection: 'overview'
+      activeSection: 'overview',
+      refinance: {
+        fixedPeriodYears: FINANCE_CONFIG.defaultFixedPeriodYears
+      }
     }
   };
 }
@@ -1582,7 +1686,8 @@ export const managementView = derived(gameState, ($state) => {
       isOwned: false,
       saleState: null,
       leasingControls: createEmptyLeasingControls(),
-      maintenanceState: createEmptyMaintenanceState()
+      maintenanceState: createEmptyMaintenanceState(),
+      refinance: createEmptyRefinanceView()
     };
   }
   const property =
@@ -1603,7 +1708,8 @@ export const managementView = derived(gameState, ($state) => {
       isOwned: false,
       saleState: null,
       leasingControls: createEmptyLeasingControls(),
-      maintenanceState: createEmptyMaintenanceState()
+      maintenanceState: createEmptyMaintenanceState(),
+      refinance: createEmptyRefinanceView()
     };
   }
 
@@ -1682,7 +1788,7 @@ export const managementView = derived(gameState, ($state) => {
     ? `
         <div class="section-card">
           <h6>Mortgage details</h6>
-          <p class="mb-2">Outstanding balance: <strong>${formatCurrency(property.mortgage.principal)}</strong></p>
+          <p class="mb-2">Outstanding balance: <strong>${formatCurrency(property.mortgage.remainingBalance)}</strong></p>
           <p class="mb-2">Monthly payment: <strong>${formatCurrency(property.mortgage.monthlyPayment)}</strong></p>
           <p class="mb-0">Rate: <strong>${formatInterestRate(property.mortgage.annualInterestRate)}</strong></p>
         </div>
@@ -1745,6 +1851,129 @@ export const managementView = derived(gameState, ($state) => {
   const isOwned = $state.portfolio.some((item) => item.id === property.id);
   const saleContext = isOwned ? createSaleContext(property) : null;
 
+  const requestedRefinanceYears = Number.isFinite($state.management.refinance.fixedPeriodYears)
+    ? Math.max($state.management.refinance.fixedPeriodYears, 1 / 12)
+    : FINANCE_CONFIG.defaultFixedPeriodYears;
+
+  const mortgage = property.mortgage;
+  let refinance: ManagementRefinanceView = {
+    available: false,
+    reason: null,
+    options: [],
+    preview: null,
+    equity: 0,
+    equityRatio: 0,
+    propertyValue: 0,
+    outstandingBalance: 0,
+    centralBankRate: $state.centralBankRate,
+    remainingTermYears: 0,
+    selectedFixedPeriodYears: requestedRefinanceYears
+  };
+
+  if (mortgage) {
+    const equitySnapshot = calculatePropertyEquity(property);
+    refinance = {
+      ...refinance,
+      equity: equitySnapshot.equity,
+      equityRatio: equitySnapshot.ratio,
+      propertyValue: equitySnapshot.value,
+      outstandingBalance: equitySnapshot.outstanding
+    };
+    const remainingTermMonths = Math.max(mortgage.remainingTermMonths ?? 0, 0);
+    const remainingTermYears = remainingTermMonths > 0 ? Math.max(remainingTermMonths / 12, 1 / 12) : 0;
+
+    if (
+      mortgage.variableRateActive &&
+      mortgage.remainingBalance > 0.5 &&
+      remainingTermMonths > 0 &&
+      equitySnapshot.outstanding > 0 &&
+      equitySnapshot.value > 0
+    ) {
+      let selectedYears = Math.min(requestedRefinanceYears, remainingTermYears);
+      if (!Number.isFinite(selectedYears) || selectedYears <= 0) {
+        selectedYears = Math.min(FINANCE_CONFIG.defaultFixedPeriodYears, remainingTermYears);
+      }
+      selectedYears = Math.max(selectedYears, 1 / 12);
+
+      const profile = deriveMortgageRateProfile({
+        centralBankRate: $state.centralBankRate,
+        depositRatio: equitySnapshot.ratio,
+        fixedPeriodYears: selectedYears
+      });
+
+      const effectiveYears = Math.min(profile.fixedPeriodYears, remainingTermYears);
+      const fixedPeriodMonths = Math.max(Math.min(Math.round(effectiveYears * 12), remainingTermMonths), 1);
+      const monthlyPayment = mortgage.interestOnly
+        ? roundCurrency(equitySnapshot.outstanding * (profile.fixedRate / 12))
+        : calculateMonthlyPayment({
+            principal: equitySnapshot.outstanding,
+            annualRate: profile.fixedRate,
+            termMonths: remainingTermMonths,
+            interestOnly: false
+          });
+      const paymentDelta = roundCurrency(monthlyPayment - mortgage.monthlyPayment);
+
+      const options: ManagementRefinanceOption[] = [];
+      let hasActiveOption = false;
+
+      FINANCE_CONFIG.fixedPeriodOptions.forEach((years) => {
+        const disabled = years > remainingTermYears + 1e-6;
+        const isActive = !disabled && Math.abs(years - effectiveYears) < 1e-6;
+        if (isActive) {
+          hasActiveOption = true;
+        }
+        options.push({ years, label: `${years} years`, disabled, active: isActive });
+      });
+
+      if (remainingTermYears > 0) {
+        const roundedRemaining = Number(remainingTermYears.toFixed(2));
+        const fullTermActive = Math.abs(effectiveYears - remainingTermYears) < 1e-6 || !hasActiveOption;
+        options.push({
+          years: remainingTermYears,
+          label: `Full remaining term (${roundedRemaining}y)`,
+          disabled: false,
+          active: fullTermActive
+        });
+      }
+
+      refinance = {
+        available: true,
+        reason: null,
+        options,
+        preview: {
+          fixedPeriodYears: effectiveYears,
+          fixedPeriodMonths,
+          fixedRate: profile.fixedRate,
+          reversionRate: profile.reversionRate,
+          baseRate: profile.baseRate,
+          variableRateMargin: profile.variableRateMargin,
+          monthlyPayment,
+          paymentDelta
+        },
+        equity: equitySnapshot.equity,
+        equityRatio: equitySnapshot.ratio,
+        propertyValue: equitySnapshot.value,
+        outstandingBalance: equitySnapshot.outstanding,
+        centralBankRate: $state.centralBankRate,
+        remainingTermYears,
+        selectedFixedPeriodYears: effectiveYears
+      };
+    } else {
+      refinance = {
+        ...refinance,
+        remainingTermYears,
+        reason: mortgage.variableRateActive
+          ? 'No remaining balance or term to refinance.'
+          : 'Mortgage is currently within its fixed rate period.'
+      };
+    }
+  } else {
+    refinance = {
+      ...refinance,
+      reason: 'Property has no active mortgage.'
+    };
+  }
+
   return {
     open: true,
     activeSection: $state.management.activeSection,
@@ -1778,7 +2007,8 @@ export const managementView = derived(gameState, ($state) => {
       marketingPaused: property.rentalMarketingPausedForMaintenance,
       hasTenant: Boolean(property.tenant)
     },
-    maintenanceState
+    maintenanceState,
+    refinance
   };
 });
 
@@ -1963,7 +2193,11 @@ export function openManagement(propertyId: string): void {
       ...state.management,
       open: true,
       propertyId,
-      activeSection: 'overview'
+      activeSection: 'overview',
+      refinance: {
+        ...state.management.refinance,
+        fixedPeriodYears: FINANCE_CONFIG.defaultFixedPeriodYears
+      }
     }
   }));
 }
@@ -1974,7 +2208,11 @@ export function closeManagement(): void {
     management: {
       ...state.management,
       open: false,
-      propertyId: null
+      propertyId: null,
+      refinance: {
+        ...state.management.refinance,
+        fixedPeriodYears: FINANCE_CONFIG.defaultFixedPeriodYears
+      }
     }
   }));
 }
@@ -1987,6 +2225,150 @@ export function setManagementSection(section: ManagementState['activeSection']):
       activeSection: section
     }
   }));
+}
+
+export function setManagementRefinanceFixedPeriod(years: number): void {
+  if (!Number.isFinite(years) || years <= 0) {
+    return;
+  }
+
+  const clamped = Math.max(years, 1 / 12);
+
+  gameState.update((state) => ({
+    ...state,
+    management: {
+      ...state.management,
+      refinance: {
+        ...state.management.refinance,
+        fixedPeriodYears: clamped
+      }
+    }
+  }));
+}
+
+export function confirmManagementRefinance(propertyId: string): void {
+  if (!propertyId) {
+    return;
+  }
+
+  gameState.update((state) => {
+    const index = state.portfolio.findIndex((property) => property.id === propertyId);
+    if (index === -1) {
+      return state;
+    }
+
+    const property = state.portfolio[index];
+    const mortgage = property.mortgage;
+    if (!mortgage || !mortgage.variableRateActive || mortgage.remainingBalance <= 0.5) {
+      return state;
+    }
+
+    const remainingTermMonths = Math.max(mortgage.remainingTermMonths ?? 0, 0);
+    if (remainingTermMonths <= 0) {
+      return state;
+    }
+
+    const equitySnapshot = calculatePropertyEquity(property);
+    if (equitySnapshot.outstanding <= 0 || equitySnapshot.value <= 0) {
+      return state;
+    }
+
+    const remainingTermYears = Math.max(remainingTermMonths / 12, 1 / 12);
+    const requestedYears = Number.isFinite(state.management.refinance.fixedPeriodYears)
+      ? Math.max(state.management.refinance.fixedPeriodYears, 1 / 12)
+      : FINANCE_CONFIG.defaultFixedPeriodYears;
+
+    let selectedYears = Math.min(requestedYears, remainingTermYears);
+    if (!Number.isFinite(selectedYears) || selectedYears <= 0) {
+      selectedYears = Math.min(FINANCE_CONFIG.defaultFixedPeriodYears, remainingTermYears);
+    }
+    selectedYears = Math.max(selectedYears, 1 / 12);
+
+    const profile = deriveMortgageRateProfile({
+      centralBankRate: state.centralBankRate,
+      depositRatio: equitySnapshot.ratio,
+      fixedPeriodYears: selectedYears
+    });
+
+    const effectiveYears = Math.min(profile.fixedPeriodYears, remainingTermYears);
+    const fixedPeriodMonths = Math.max(Math.min(Math.round(effectiveYears * 12), remainingTermMonths), 1);
+    const fixedRate = profile.fixedRate;
+    const monthlyRate = fixedRate / 12;
+    const outstanding = roundCurrency(equitySnapshot.outstanding);
+    const monthlyPayment = mortgage.interestOnly
+      ? roundCurrency(outstanding * monthlyRate)
+      : calculateMonthlyPayment({
+          principal: outstanding,
+          annualRate: fixedRate,
+          termMonths: remainingTermMonths,
+          interestOnly: false
+        });
+
+    const depositRatio = Math.min(Math.max(equitySnapshot.ratio, MINIMUM_DEPOSIT_RATIO), 0.95);
+    const deposit = roundCurrency(property.cost * depositRatio);
+
+    const updatedMortgage: Mortgage = {
+      ...mortgage,
+      depositRatio,
+      deposit,
+      principal: outstanding,
+      baseRate: profile.baseRate,
+      annualInterestRate: fixedRate,
+      monthlyInterestRate: monthlyRate,
+      variableRateMargin: profile.variableRateMargin,
+      reversionRate: profile.reversionRate,
+      termMonths: remainingTermMonths,
+      remainingTermMonths,
+      fixedPeriodYears: effectiveYears,
+      fixedPeriodMonths,
+      monthlyPayment,
+      variableRateActive: false
+    };
+
+    const updatedProperty: GameProperty = { ...property, mortgage: updatedMortgage };
+    const portfolio = [...state.portfolio];
+    portfolio[index] = updatedProperty;
+
+    const refinanceReset = {
+      ...state.management.refinance,
+      fixedPeriodYears: FINANCE_CONFIG.defaultFixedPeriodYears
+    };
+
+    let nextState: GameState = {
+      ...state,
+      portfolio,
+      management: {
+        ...state.management,
+        refinance: refinanceReset
+      }
+    };
+
+    const equityPercentLabel = formatPercentage(equitySnapshot.ratio);
+    const fixedRateLabel = formatInterestRate(fixedRate);
+    const baseRateLabel = formatInterestRate(profile.baseRate);
+    const marginLabel = formatInterestRate(profile.variableRateMargin);
+    const reversionLabel = formatInterestRate(profile.reversionRate);
+    const outstandingLabel = formatCurrency(outstanding);
+    const monthlyPaymentLabel = formatCurrency(monthlyPayment);
+    const fixedYearsLabel = Number(effectiveYears.toFixed(2));
+    const fixedPeriodLabel = `${fixedYearsLabel} year${Math.abs(fixedYearsLabel - 1) < 1e-6 ? '' : 's'}`;
+
+    nextState = addHistory(
+      nextState,
+      `Locked a new fixed rate on ${property.name}: ${equityPercentLabel} equity unlocked ${fixedRateLabel} for ${fixedPeriodLabel} (base ${baseRateLabel} + ${marginLabel} = ${reversionLabel} thereafter). New payment ${monthlyPaymentLabel} / month on ${outstandingLabel} outstanding.`
+    );
+
+    if (equitySnapshot.equity > 0) {
+      const equityLabel = formatCurrency(equitySnapshot.equity);
+      const valueLabel = formatCurrency(equitySnapshot.value);
+      nextState = addHistory(
+        nextState,
+        `${property.name} now has ${equityLabel} equity (${equityPercentLabel} of current value ${valueLabel}).`
+      );
+    }
+
+    return nextState;
+  });
 }
 
 function updatePortfolioProperty(

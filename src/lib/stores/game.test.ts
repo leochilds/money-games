@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 
-import { MAINTENANCE_CONFIG, MARKET_CONFIG } from '$lib/config';
+import { FINANCE_CONFIG, MAINTENANCE_CONFIG, MARKET_CONFIG } from '$lib/config';
 import { formatCurrency } from '$lib/utils';
 import {
+  confirmManagementRefinance,
   gameState,
   getRentStrategies,
   initialiseGame,
@@ -11,6 +12,7 @@ import {
   pauseGame,
   resumeGame,
   sellProperty,
+  setManagementRefinanceFixedPeriod,
   setPropertyRentalMarketingActive,
   tickDay
 } from './game';
@@ -355,6 +357,76 @@ describe('mortgage processing', () => {
     const lastHistory = updated.history[updated.history.length - 1]?.message ?? '';
     expect(lastHistory).toContain('Forced sale of Balloon Test');
     expect(updated.balance).toBeGreaterThan(initialState.balance);
+  });
+});
+
+describe('mortgage refinance', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    initialiseGame();
+  });
+
+  it('locks a new fixed rate and updates mortgage details', () => {
+    const baseState = get(gameState);
+    const mortgage = {
+      depositRatio: 0.2,
+      deposit: 60_000,
+      principal: 240_000,
+      fixedPeriodYears: 2,
+      fixedPeriodMonths: 24,
+      interestOnly: false,
+      annualInterestRate: 0.05,
+      reversionRate: 0.055,
+      baseRate: baseState.centralBankRate,
+      variableRateMargin: 0.015,
+      variableRateActive: true,
+      monthlyPayment: 1_600,
+      monthlyInterestRate: 0.055 / 12,
+      remainingTermMonths: 240,
+      termMonths: 240,
+      remainingBalance: 200_000
+    } as const;
+
+    const property = createProperty({
+      id: 'refi-test',
+      name: 'Refi Test',
+      cost: 320_000,
+      baseValue: 320_000,
+      mortgage: { ...mortgage },
+      autoRelist: false
+    });
+
+    gameState.set({
+      ...baseState,
+      centralBankRate: 0.04,
+      portfolio: [property],
+      management: {
+        ...baseState.management,
+        open: true,
+        propertyId: property.id,
+        activeSection: 'financing',
+        refinance: { fixedPeriodYears: FINANCE_CONFIG.defaultFixedPeriodYears }
+      }
+    });
+
+    setManagementRefinanceFixedPeriod(5);
+    confirmManagementRefinance(property.id);
+
+    const updatedState = get(gameState);
+    const updatedMortgage = updatedState.portfolio[0]?.mortgage;
+
+    expect(updatedMortgage?.variableRateActive).toBe(false);
+    expect(updatedMortgage?.fixedPeriodYears).toBeGreaterThan(0);
+    expect(updatedMortgage?.annualInterestRate).toBeLessThan(mortgage.annualInterestRate);
+    expect(updatedMortgage?.monthlyPayment).toBeGreaterThan(0);
+    expect(updatedState.management.refinance.fixedPeriodYears).toBe(
+      FINANCE_CONFIG.defaultFixedPeriodYears
+    );
+
+    const lockLogged = updatedState.history.some((entry) =>
+      entry.message.includes('Locked a new fixed rate on Refi Test')
+    );
+    expect(lockLogged).toBe(true);
   });
 });
 
