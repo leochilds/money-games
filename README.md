@@ -1,8 +1,21 @@
 # Money Games
 
-This project is now powered by [SvelteKit](https://kit.svelte.dev/). The previous static site lives under [`legacy/`](legacy/) for reference while the new application is implemented.
+[![CI tests](https://img.shields.io/github/actions/workflow/status/leochilds/money-games/ci.yml?label=tests&branch=main)](https://github.com/leochilds/money-games/actions/workflows/ci.yml)
+![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fleochilds%2Fmoney-games%2Fmain%2F.github%2Fbadges%2Fcoverage.json)
+
+An interactive collection of financial literacy games built with [SvelteKit](https://kit.svelte.dev/). The live site is deployed to GitHub Pages at [leochilds.github.io/money-games](https://leochilds.github.io/money-games/).
+
+The previous static implementation is retained in [`legacy/`](legacy/) for reference while new experiences are implemented in SvelteKit.
+
+## Features
+
+- ✨ Modern SvelteKit application with TypeScript support.
+- 🧪 Component and unit testing powered by Vitest and Testing Library.
+- 🚀 Static site generation via the SvelteKit static adapter for fast GitHub Pages deployments.
 
 ## Getting started
+
+Install dependencies and start a local development server:
 
 ```bash
 npm install
@@ -11,7 +24,9 @@ npm run dev
 
 By default the development server is available at [http://localhost:5173](http://localhost:5173).
 
-## Linting and type checking
+## Quality checks
+
+Run linting and Svelte type checks locally before committing changes:
 
 ```bash
 npm run lint
@@ -19,6 +34,22 @@ npm run check
 ```
 
 Both commands are also run in CI before deployment.
+
+Execute the Vitest suite in watch mode during development with:
+
+```bash
+npm run test:watch
+```
+
+### Test coverage
+
+Generate a full coverage report using Vitest:
+
+```bash
+npm run test:coverage
+```
+
+The command produces an HTML coverage report in `coverage/index.html` alongside summary information in the terminal output. A GitHub Actions workflow (`ci.yml`) executes the same coverage command on every push to `main`, updating the coverage badge JSON consumed above so the README always reflects the latest results from the canonical branch.
 
 ## Building for production
 

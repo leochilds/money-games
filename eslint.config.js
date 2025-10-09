@@ -11,7 +11,8 @@ const ignores = {
     'legacy',
     'static/assets',
     'eslint.config.js',
-    'svelte.config.js'
+    'svelte.config.js',
+    'scripts/update-coverage-badge.mjs'
   ]
 };
 
